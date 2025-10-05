@@ -20,9 +20,15 @@ from .operations import (
 from .utils import _logger
 
 
+class SplitCommaSeparated(argparse.Action):
+    """Argparse action to split comma separated args into list"""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, [v.strip() for v in values.split(",") if v.strip()])
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="windnf - Windows DNF-like RPM package manager")
-
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     repoadd_parser = subparsers.add_parser("repoadd", help="Add/update a repository")
@@ -31,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     repoadd_parser.add_argument(
         "--repomd",
         default="repodata/repomd.xml",
-        help="Repomd.xml relative path (default: repodata/repomd.xml)",
+        help="Path to repomd.xml (default: repodata/repomd.xml)",
     )
 
     subparsers.add_parser("repolist", help="List all configured repositories")
@@ -41,44 +47,57 @@ def parse_args() -> argparse.Namespace:
         "repo",
         nargs="?",
         default="all",
-        help="Repository name to sync or 'all' to sync all repositories",
+        help="Repo name to sync or 'all' (default: all)",
     )
 
     repodel_parser = subparsers.add_parser("repodel", help="Delete a repository and all its packages")
-    repodel_parser.add_argument("name", help="Repository name to delete")
+    repodel_parser.add_argument("name", help="Repository name")
 
     search_parser = subparsers.add_parser("search", help="Search packages")
     search_parser.add_argument("pattern", help="Package name or pattern (wildcards allowed)")
     search_parser.add_argument(
-        "--repos", help="Comma separated list of repositories to search (default: all)", default=None
+        "--repo",
+        help="Comma separated repos to search (default: all)",
+        action=SplitCommaSeparated,
+        default=None,
     )
     search_parser.add_argument(
         "--showduplicates",
         action="store_true",
-        help="Show all versions of matching packages (default: False)",
+        help="Show all matching package versions (default: show only latest)",
     )
 
     resolve_parser = subparsers.add_parser("resolve", help="Resolve package dependencies")
     resolve_parser.add_argument("packages", nargs="+", help="Package name(s) to resolve")
-    resolve_parser.add_argument("--repo", help="Repository name")
+    resolve_parser.add_argument(
+        "--repo",
+        help="Comma separated repository names",
+        action=SplitCommaSeparated,
+        default=None,
+    )
     resolve_parser.add_argument("--recurse", action="store_true", help="Recursively resolve dependencies")
     resolve_parser.add_argument("--weakdeps", action="store_true", help="Include weak dependencies")
     resolve_parser.add_argument(
         "--showduplicates",
         action="store_true",
-        help="Show all versions of packages in dependency resolution (default: False)",
+        help="Show all package versions in resolution (default: show only latest)",
     )
 
     download_parser = subparsers.add_parser("download", help="Download packages")
     download_parser.add_argument("packages", nargs="+", help="Package name(s) to download")
-    download_parser.add_argument("--repo", help="Comma separated list of repositories to download from")
-    download_parser.add_argument("--alldeps", action="store_true", help="Download dependencies also")
+    download_parser.add_argument(
+        "--repo",
+        help="Comma separated repos to download from",
+        action=SplitCommaSeparated,
+        default=None,
+    )
+    download_parser.add_argument("--alldeps", action="store_true", help="Include dependencies in download")
     download_parser.add_argument("--recurse", action="store_true", help="Recursively download dependencies")
     download_parser.add_argument("--weakdeps", action="store_true", help="Include weak dependencies")
     download_parser.add_argument(
         "--fetchduplicates",
         action="store_true",
-        help="Allow downloading multiple versions of the same package (default: False)",
+        help="Download multiple versions of the same package (default: only latest)",
     )
 
     return parser.parse_args()
@@ -101,37 +120,33 @@ def main() -> None:
 
         if cmd == "repoadd":
             add_repo(db_manager, args.name, args.baseurl, args.repomd)
+            _logger.info(f"Repository '{args.name}' added or updated.")
         elif cmd == "repolist":
             list_repos(db_manager)
         elif cmd == "reposync":
             sync_repos(metadata_manager, db_manager, args.repo)
         elif cmd == "repodel":
             delete_repo(db_manager, args.name)
+            _logger.info(f"Repository '{args.name}' deleted.")
         elif cmd == "search":
-            repos = None
-            if args.repos:
-                repos = [r.strip() for r in args.repos.split(",") if r.strip()]
-            search_packages(db_manager, args.pattern, repos, showduplicates=args.showduplicates)
+            search_packages(db_manager, args.pattern, repo_names=args.repo, showduplicates=args.showduplicates)
         elif cmd == "resolve":
             for pkg in args.packages:
                 resolve_dependencies(
                     db_manager,
                     pkg,
-                    repo_name=args.repo,
+                    repo_names=args.repo,
                     recurse=args.recurse,
                     include_weak=args.weakdeps,
                     showduplicates=args.showduplicates,
                 )
         elif cmd == "download":
-            repo_names = None
-            if args.repo:
-                repo_names = [r.strip() for r in args.repo.split(",") if r.strip()]
             download_packages(
                 db_manager,
                 metadata_manager,
                 config,
                 args.packages,
-                repo_names=repo_names,
+                repo_names=args.repo,
                 download_deps=args.alldeps,
                 recurse=args.recurse,
                 include_weak=args.weakdeps,
@@ -142,7 +157,7 @@ def main() -> None:
 
     except KeyboardInterrupt:
         _logger.warning("Terminated by user (Ctrl+C). Exiting...")
-        sys.exit(0)
+        sys.exit(130)
 
     except Exception as e:
         _logger.error(f"Unexpected error: {e}")

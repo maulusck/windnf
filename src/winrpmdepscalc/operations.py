@@ -81,147 +81,6 @@ def search_packages(
         print(f"{pkg['name']:<30} {pkg['repo_name']:<15} Ver: {pkg['version']}-{pkg['release']} Arch: {pkg['arch']}")
 
 
-def resolve_dependencies(
-    db_manager: DbManager,
-    package_name: str,
-    repo_name: Optional[str] = None,
-    recurse: bool = False,
-    include_weak: bool = False,
-    showduplicates: bool = False,
-) -> None:
-    pkg_row = None
-    if repo_name:
-        pkg_row = db_manager.get_package_by_name_repo(repo_name, package_name)
-        if not pkg_row:
-            _logger.error(f"Package '{package_name}' not found in repo '{repo_name}'.")
-            return
-    else:
-        for repo in db_manager.get_repositories():
-            candidate = db_manager.get_package_by_name_repo(repo["name"], package_name)
-            if candidate:
-                pkg_row = candidate
-                break
-        if not pkg_row:
-            _logger.error(f"Package '{package_name}' not found in any repository.")
-            return
-
-    resolved_ids: Set[int] = set()
-    to_resolve: Set[int] = {pkg_row["id"]}
-    id_to_info = {}
-
-    def load_info(pkg_id: int):
-        if pkg_id in id_to_info:
-            return id_to_info[pkg_id]
-        info = db_manager.get_package_info_by_id(pkg_id)
-        if info:
-            id_to_info[pkg_id] = info
-        return info
-
-    while to_resolve:
-        current = to_resolve.pop()
-        if current in resolved_ids:
-            continue
-        resolved_ids.add(current)
-        dep_ids = db_manager.get_required_package_ids(current, include_weak)
-        if recurse:
-            to_resolve.update(dep_ids - resolved_ids)
-        else:
-            resolved_ids.update(dep_ids)
-
-    pkgs = [load_info(pid) for pid in resolved_ids if load_info(pid) is not None]
-
-    if not showduplicates:
-        seen = set()
-        filtered = []
-        for pkg in pkgs:
-            key = (pkg["name"], pkg["repo_name"])
-            if key not in seen:
-                seen.add(key)
-                filtered.append(pkg)
-        pkgs = filtered
-
-    print(f"{'Package Name':<30}{'Repo':<15}{'Version':<10}{'Release':<10}{'Epoch':<6}{'Arch':<8}")
-    print("-" * 79)
-    for info in sorted(pkgs, key=lambda p: p["name"]):
-        print(
-            f"{info['name']:<30}"
-            f"{info['repo_name']:<15}"
-            f"{info['version']:<10}"
-            f"{info['release']:<10}"
-            f"{info['epoch']:<6}"
-            f"{info['arch']:<8}"
-        )
-
-
-def download_packages(
-    db_manager: DbManager,
-    metadata_manager: MetadataManager,
-    config: Config,
-    package_names: List[str],
-    repo_names: Optional[List[str]] = None,
-    download_deps: bool = False,
-    recurse: bool = False,
-    include_weak: bool = False,
-    fetchduplicates: bool = False,
-    max_depth: int = 50,
-) -> None:
-    if recurse and not download_deps:
-        download_deps = True
-
-    download_dir = config.download_path
-    download_dir.mkdir(parents=True, exist_ok=True)
-
-    to_download = set()
-
-    def gather_deps(pkg_name: str, depth: int = 0):
-        to_download.add(pkg_name)
-        if download_deps:
-            if not recurse or (recurse and depth < max_depth):
-                deps = _get_direct_dependencies(db_manager, pkg_name, repo_names, include_weak)
-                for dep in deps:
-                    if dep not in to_download:
-                        if recurse:
-                            gather_deps(dep, depth + 1)
-                        else:
-                            to_download.add(dep)
-
-    for pkg in package_names:
-        gather_deps(pkg)
-
-    if not to_download:
-        _logger.info("No packages to download.")
-        return
-
-    if not fetchduplicates:
-        filtered = {}
-        for name in to_download:
-            rows = db_manager.search_packages(name, repo_names)
-            for pkg in rows:
-                key = (pkg["name"], pkg["repo_name"])
-                if key not in filtered:
-                    filtered[key] = pkg
-        to_download = {pkg_info["name"] for pkg_info in filtered.values()}
-
-    _logger.info(f"Downloading packages: {', '.join(sorted(to_download))}")
-
-    for pkg in sorted(to_download):
-        pkg_info = _find_package_info(db_manager, pkg, repo_names)
-        if not pkg_info:
-            _logger.warning(f"Package {pkg} not found in configured repos.")
-            continue
-
-        url = urljoin(pkg_info["base_url"], pkg_info["filepath"])
-        dest_file = download_dir / Path(pkg_info["filepath"]).name
-        if dest_file.exists():
-            _logger.info(f"Already downloaded: {dest_file.name}")
-            continue
-        try:
-            metadata_manager.downloader.download(url, dest_file)
-            _logger.info(f"Downloaded: {dest_file.name}")
-        except Exception as e:
-            _logger.error(f"Failed to download {dest_file.name}: {e}")
-
-
 def _get_direct_dependencies(
     db_manager: DbManager,
     package_name: str,
@@ -239,6 +98,170 @@ def _get_direct_dependencies(
     return list(deps)
 
 
+def _gather_dependency_tree(
+    db_manager: DbManager,
+    package_names: List[str],
+    repo_names: Optional[List[str]],
+    include_weak: bool,
+    max_depth: int = 50,
+) -> Set[str]:
+    resolved: Set[str] = set()
+    visiting: Set[str] = set()
+
+    def recurse(pkgs: List[str], depth: int):
+        if depth > max_depth:
+            _logger.warning(f"Max dependency depth {max_depth} reached, stopping recursion")
+            return
+        for p in pkgs:
+            if p in resolved:
+                continue
+            if p in visiting:
+                _logger.error(f"Circular dependency detected on package '{p}'")
+                continue
+            visiting.add(p)
+            resolved.add(p)
+            direct_deps = _get_direct_dependencies(db_manager, p, repo_names, include_weak)
+            recurse(direct_deps, depth + 1)
+            visiting.remove(p)
+
+    recurse(package_names, 0)
+    return resolved
+
+
+def print_dependencies_tabular(package_name: str, dependencies_info: List[dict]) -> None:
+    print(f"Dependencies for package: {package_name}")
+    print(f"{'Package Name':<40}{'Repo':<20}{'Version':<15}{'Release':<15}{'Epoch':<8}{'Arch':<10}")
+    print("-" * 108)
+    for info in sorted(dependencies_info, key=lambda p: p["name"]):
+        print(
+            f"{info['name']:<40}"
+            f"{info['repo_name']:<20}"
+            f"{info['version']:<15}"
+            f"{info['release']:<15}"
+            f"{info['epoch']:<8}"
+            f"{info['arch']:<10}"
+        )
+
+
+def resolve_dependencies(
+    db_manager: DbManager,
+    package_name: str,
+    repo_names: Optional[List[str]] = None,
+    recurse: bool = False,
+    include_weak: bool = False,
+    showduplicates: bool = False,
+) -> None:
+    matched_pkgs = db_manager.search_packages(package_name, repo_names)
+    if not matched_pkgs:
+        repo_str = f" in repos {repo_names}" if repo_names else ""
+        _logger.error(f"Package '{package_name}' not found{repo_str}.")
+        return
+
+    root_pkgs = list({pkg["name"] for pkg in matched_pkgs})
+
+    for root_pkg in root_pkgs:
+        if recurse:
+            all_pkgs = _gather_dependency_tree(db_manager, [root_pkg], repo_names, include_weak)
+        else:
+            all_pkgs = {root_pkg}
+            all_pkgs.update(_get_direct_dependencies(db_manager, root_pkg, repo_names, include_weak))
+
+        if not all_pkgs:
+            _logger.info(f"No dependencies resolved for package '{root_pkg}'.")
+            continue
+
+        pkgs_info = []
+        for pkg_name in all_pkgs:
+            pkgs = db_manager.search_packages(pkg_name, repo_names)
+            if pkgs:
+                pkgs_info.extend(pkgs)
+
+        if not showduplicates:
+            seen = set()
+            filtered = []
+            for pkg in pkgs_info:
+                key = (pkg["name"], pkg["repo_name"])
+                if key not in seen:
+                    seen.add(key)
+                    filtered.append(pkg)
+            pkgs_info = filtered
+
+        print_dependencies_tabular(root_pkg, pkgs_info)
+
+
+def download_packages(
+    db_manager: DbManager,
+    metadata_manager: MetadataManager,
+    config: Config,
+    package_names: List[str],
+    repo_names: Optional[List[str]] = None,
+    download_deps: bool = False,
+    recurse: bool = False,
+    include_weak: bool = False,
+    fetchduplicates: bool = False,
+    max_depth: int = 50,
+) -> None:
+    if download_deps:
+        all_packages = (
+            _gather_dependency_tree(db_manager, package_names, repo_names, include_weak, max_depth)
+            if recurse
+            else set(package_names).union(
+                set(
+                    dep
+                    for pkg in package_names
+                    for dep in _get_direct_dependencies(db_manager, pkg, repo_names, include_weak)
+                )
+            )
+        )
+    else:
+        all_packages = set(package_names)
+
+    if not all_packages:
+        _logger.info("No packages to download.")
+        return
+
+    if not fetchduplicates:
+        filtered = {}
+        for name in all_packages:
+            rows = db_manager.search_packages(name, repo_names)
+            for pkg in rows:
+                key = (pkg["name"], pkg["repo_name"])
+                if key not in filtered:
+                    filtered[key] = pkg
+        package_infos = list(filtered.values())
+    else:
+        package_infos = []
+        for name in all_packages:
+            rows = db_manager.search_packages(name, repo_names)
+            if rows:
+                package_infos.extend(rows)
+
+    download_dir = config.download_path
+    download_dir.mkdir(parents=True, exist_ok=True)
+    _logger.info(f"Downloading packages: {', '.join(sorted(all_packages))}")
+
+    for pkg_name in sorted(all_packages):
+        pkg_info = _find_package_info(db_manager, pkg_name, repo_names)
+        if not pkg_info:
+            _logger.warning(f"Package {pkg_name} not found in configured repos.")
+            continue
+
+        url = urljoin(pkg_info["base_url"], pkg_info["filepath"])
+        if not url:
+            _logger.warning(f"Skipping {pkg_name}: no valid download URL found")
+            continue
+
+        dest_file = download_dir / Path(pkg_info["filepath"]).name
+        if dest_file.exists():
+            _logger.info(f"Already downloaded: {dest_file.name}")
+            continue
+        try:
+            metadata_manager.downloader.download(url, dest_file)
+            _logger.info(f"Downloaded: {dest_file.name}")
+        except Exception as e:
+            _logger.error(f"Failed to download {dest_file.name}: {e}")
+
+
 def _find_package_info(db_manager: DbManager, package_name: str, repo_names: Optional[List[str]]):
     rows = db_manager.search_packages(package_name, repo_names)
     if not rows:
@@ -248,3 +271,26 @@ def _find_package_info(db_manager: DbManager, package_name: str, repo_names: Opt
     if not base_url:
         return None
     return {"base_url": base_url, "filepath": pkg["filepath"]}
+
+
+def print_package_table(pkgs_info: List[dict]) -> None:
+    if not pkgs_info:
+        print("No packages to display.")
+        return
+
+    headers = ["Package Name", "Repo", "Version", "Release", "Epoch", "Arch"]
+    col_widths = [30, 15, 10, 10, 6, 8]
+
+    header_row = "".join(f"{h:<{w}}" for h, w in zip(headers, col_widths))
+    print(header_row)
+    print("-" * len(header_row))
+
+    for pkg in sorted(pkgs_info, key=lambda p: p["name"]):
+        print(
+            f"{pkg['name']:<30}"
+            f"{pkg['repo_name']:<15}"
+            f"{pkg['version']:<10}"
+            f"{pkg['release']:<10}"
+            f"{pkg['epoch']:<6}"
+            f"{pkg['arch']:<8}"
+        )
