@@ -99,7 +99,6 @@ class DbManager:
             )
             if cur.lastrowid:
                 return cur.lastrowid
-            # If already exists, fetch existing id
             cur = self.conn.execute(
                 "SELECT id FROM packages WHERE repo_id=? AND name=? AND version=? AND release=? AND epoch=? AND arch=?",
                 (repo_id, name, version, release, epoch, arch),
@@ -138,7 +137,7 @@ class DbManager:
             placeholders = ",".join("?" for _ in repo_names)
             query += f" AND r.name IN ({placeholders})"
             params.extend(repo_names)
-        query += " ORDER BY p.name"
+        query += " ORDER BY p.epoch DESC, p.version DESC, p.release DESC, p.name ASC"
         c.execute(query, params)
         return c.fetchall()
 

@@ -14,7 +14,7 @@ class Config:
         self.downloader = "powershell"
         self.skip_ssl_verify = True
         self.db_path = self.config_dir / "windnf.sqlite"
-        self.download_path = self.config_dir / "downloads"  # default download path
+        self.download_path = self.config_dir / "downloads"
 
         self.load()
 
@@ -29,10 +29,8 @@ class Config:
         self.skip_ssl_verify = parser.getboolean("general", "skip_ssl_verify", fallback=self.skip_ssl_verify)
         self.db_path = Path(parser.get("general", "db_path", fallback=str(self.db_path)))
 
-        # read download_path from config or fallback to default
         dp = parser.get("general", "download_path", fallback=str(self.download_path))
         self.download_path = Path(dp)
-        # Ensure the directory exists
         self.download_path.mkdir(parents=True, exist_ok=True)
 
     def _write_default_config(self) -> None:

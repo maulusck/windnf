@@ -1,6 +1,5 @@
 import argparse
 import sys
-from pathlib import Path
 from urllib.parse import urljoin
 
 import urllib3
@@ -26,8 +25,7 @@ def parse_args() -> argparse.Namespace:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Repo add (renamed from add)
-    repoadd_parser = subparsers.add_parser("repoadd", help="Add a repository")
+    repoadd_parser = subparsers.add_parser("repoadd", help="Add/update a repository")
     repoadd_parser.add_argument("name", help="Repository name")
     repoadd_parser.add_argument("baseurl", help="Repository base URL")
     repoadd_parser.add_argument(
@@ -36,10 +34,8 @@ def parse_args() -> argparse.Namespace:
         help="Repomd.xml relative path (default: repodata/repomd.xml)",
     )
 
-    # List repos
     subparsers.add_parser("repolist", help="List all configured repositories")
 
-    # Sync repos
     sync_parser = subparsers.add_parser("reposync", help="Sync repository metadata")
     sync_parser.add_argument(
         "repo",
@@ -48,31 +44,42 @@ def parse_args() -> argparse.Namespace:
         help="Repository name to sync or 'all' to sync all repositories",
     )
 
-    # Delete repo
     repodel_parser = subparsers.add_parser("repodel", help="Delete a repository and all its packages")
     repodel_parser.add_argument("name", help="Repository name to delete")
 
-    # Search packages
     search_parser = subparsers.add_parser("search", help="Search packages")
     search_parser.add_argument("pattern", help="Package name or pattern (wildcards allowed)")
     search_parser.add_argument(
         "--repos", help="Comma separated list of repositories to search (default: all)", default=None
     )
+    search_parser.add_argument(
+        "--showduplicates",
+        action="store_true",
+        help="Show all versions of matching packages (default: False)",
+    )
 
-    # Resolve dependencies (multiple packages)
     resolve_parser = subparsers.add_parser("resolve", help="Resolve package dependencies")
     resolve_parser.add_argument("packages", nargs="+", help="Package name(s) to resolve")
     resolve_parser.add_argument("--repo", help="Repository name")
     resolve_parser.add_argument("--recurse", action="store_true", help="Recursively resolve dependencies")
     resolve_parser.add_argument("--weakdeps", action="store_true", help="Include weak dependencies")
+    resolve_parser.add_argument(
+        "--showduplicates",
+        action="store_true",
+        help="Show all versions of packages in dependency resolution (default: False)",
+    )
 
-    # Download packages
     download_parser = subparsers.add_parser("download", help="Download packages")
     download_parser.add_argument("packages", nargs="+", help="Package name(s) to download")
     download_parser.add_argument("--repo", help="Comma separated list of repositories to download from")
     download_parser.add_argument("--alldeps", action="store_true", help="Download dependencies also")
     download_parser.add_argument("--recurse", action="store_true", help="Recursively download dependencies")
     download_parser.add_argument("--weakdeps", action="store_true", help="Include weak dependencies")
+    download_parser.add_argument(
+        "--fetchduplicates",
+        action="store_true",
+        help="Allow downloading multiple versions of the same package (default: False)",
+    )
 
     return parser.parse_args()
 
@@ -80,7 +87,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     try:
         args = parse_args()
-        config = Config()  # Loads ~/.windnf.conf or creates default config
+        config = Config()
 
         if config.skip_ssl_verify:
             _logger.warning("SSL verification disabled; HTTPS requests insecure.")
@@ -104,7 +111,7 @@ def main() -> None:
             repos = None
             if args.repos:
                 repos = [r.strip() for r in args.repos.split(",") if r.strip()]
-            search_packages(db_manager, args.pattern, repos)
+            search_packages(db_manager, args.pattern, repos, showduplicates=args.showduplicates)
         elif cmd == "resolve":
             for pkg in args.packages:
                 resolve_dependencies(
@@ -113,6 +120,7 @@ def main() -> None:
                     repo_name=args.repo,
                     recurse=args.recurse,
                     include_weak=args.weakdeps,
+                    showduplicates=args.showduplicates,
                 )
         elif cmd == "download":
             repo_names = None
@@ -127,8 +135,8 @@ def main() -> None:
                 download_deps=args.alldeps,
                 recurse=args.recurse,
                 include_weak=args.weakdeps,
+                fetchduplicates=args.fetchduplicates,
             )
-
         else:
             _logger.error(f"Unknown command: {cmd}")
 

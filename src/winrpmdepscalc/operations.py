@@ -55,11 +55,27 @@ def delete_repo(db_manager: DbManager, repo_name: str) -> None:
         _logger.error(f"Failed to delete repository '{repo_name}': {e}")
 
 
-def search_packages(db_manager: DbManager, pattern: str, repo_names: Optional[List[str]] = None) -> None:
+def search_packages(
+    db_manager: DbManager,
+    pattern: str,
+    repo_names: Optional[List[str]] = None,
+    showduplicates: bool = False,
+) -> None:
     pkgs = db_manager.search_packages(pattern, repo_names)
     if not pkgs:
         _logger.info("No packages found matching the pattern.")
         return
+
+    if not showduplicates:
+        seen = set()
+        filtered = []
+        for pkg in pkgs:
+            key = (pkg["name"], pkg["repo_name"])
+            if key not in seen:
+                seen.add(key)
+                filtered.append(pkg)
+        pkgs = filtered
+
     print(f"Search results for pattern '{pattern}':")
     for pkg in pkgs:
         print(f"{pkg['name']:<30} {pkg['repo_name']:<15} Ver: {pkg['version']}-{pkg['release']} Arch: {pkg['arch']}")
@@ -71,8 +87,8 @@ def resolve_dependencies(
     repo_name: Optional[str] = None,
     recurse: bool = False,
     include_weak: bool = False,
+    showduplicates: bool = False,
 ) -> None:
-    # Find package first
     pkg_row = None
     if repo_name:
         pkg_row = db_manager.get_package_by_name_repo(repo_name, package_name)
@@ -112,19 +128,29 @@ def resolve_dependencies(
         else:
             resolved_ids.update(dep_ids)
 
+    pkgs = [load_info(pid) for pid in resolved_ids if load_info(pid) is not None]
+
+    if not showduplicates:
+        seen = set()
+        filtered = []
+        for pkg in pkgs:
+            key = (pkg["name"], pkg["repo_name"])
+            if key not in seen:
+                seen.add(key)
+                filtered.append(pkg)
+        pkgs = filtered
+
     print(f"{'Package Name':<30}{'Repo':<15}{'Version':<10}{'Release':<10}{'Epoch':<6}{'Arch':<8}")
     print("-" * 79)
-    for pid in sorted(resolved_ids, key=lambda x: id_to_info.get(x, {}).get("name", "")):
-        info = load_info(pid)
-        if info:
-            print(
-                f"{info['name']:<30}"
-                f"{info['repo_name']:<15}"
-                f"{info['version']:<10}"
-                f"{info['release']:<10}"
-                f"{info['epoch']:<6}"
-                f"{info['arch']:<8}"
-            )
+    for info in sorted(pkgs, key=lambda p: p["name"]):
+        print(
+            f"{info['name']:<30}"
+            f"{info['repo_name']:<15}"
+            f"{info['version']:<10}"
+            f"{info['release']:<10}"
+            f"{info['epoch']:<6}"
+            f"{info['arch']:<8}"
+        )
 
 
 def download_packages(
@@ -136,9 +162,9 @@ def download_packages(
     download_deps: bool = False,
     recurse: bool = False,
     include_weak: bool = False,
+    fetchduplicates: bool = False,
     max_depth: int = 50,
 ) -> None:
-    # If recurse is set but not download_deps, enable download_deps implicitly
     if recurse and not download_deps:
         download_deps = True
 
@@ -151,7 +177,6 @@ def download_packages(
         to_download.add(pkg_name)
         if download_deps:
             if not recurse or (recurse and depth < max_depth):
-                # Get dependencies by capability mapping to package names
                 deps = _get_direct_dependencies(db_manager, pkg_name, repo_names, include_weak)
                 for dep in deps:
                     if dep not in to_download:
@@ -166,6 +191,16 @@ def download_packages(
     if not to_download:
         _logger.info("No packages to download.")
         return
+
+    if not fetchduplicates:
+        filtered = {}
+        for name in to_download:
+            rows = db_manager.search_packages(name, repo_names)
+            for pkg in rows:
+                key = (pkg["name"], pkg["repo_name"])
+                if key not in filtered:
+                    filtered[key] = pkg
+        to_download = {pkg_info["name"] for pkg_info in filtered.values()}
 
     _logger.info(f"Downloading packages: {', '.join(sorted(to_download))}")
 
@@ -193,9 +228,6 @@ def _get_direct_dependencies(
     repo_names: Optional[List[str]],
     include_weak: bool,
 ) -> List[str]:
-    """
-    Resolve direct dependencies of all packages matching package_name into concrete package names.
-    """
     deps = set()
     matched_pkgs = db_manager.search_packages(package_name, repo_names)
     for pkg in matched_pkgs:
