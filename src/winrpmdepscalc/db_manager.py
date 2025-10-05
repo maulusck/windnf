@@ -59,8 +59,21 @@ class DbManager:
     def add_repository(self, name: str, base_url: str, repomd_url: str) -> None:
         with self.conn:
             self.conn.execute(
-                "INSERT OR IGNORE INTO repositories(name, base_url, repomd_url) VALUES (?, ?, ?)",
+                """
+                INSERT INTO repositories(name, base_url, repomd_url)
+                VALUES (?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    base_url=excluded.base_url,
+                    repomd_url=excluded.repomd_url
+                """,
                 (name, base_url, repomd_url),
+            )
+
+    def update_repo_timestamp(self, repo_id: int, timestamp: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE repositories SET last_updated = ? WHERE id = ?",
+                (timestamp, repo_id),
             )
 
     def get_repositories(self) -> List[sqlite3.Row]:
