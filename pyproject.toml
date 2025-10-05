@@ -3,7 +3,7 @@ requires = ["setuptools>=80", "wheel", "setuptools_scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "winrpmdepscalc"
+name = "windnf"
 description = "Windows RPM Package Metadata Calculator Tool"
 authors = [{ name = "Maulusck✖Perplexity", email = "maulusck@pm.me" }]
 license = "WTFPL"
@@ -19,10 +19,10 @@ dependencies = ["requests", "PyYAML", "tqdm", "urllib3"]
 dynamic = ["version"]
 
 [project.urls]
-Home-page = "https://github.com/maulusck/winrpmdepscalc"
+Home-page = "https://github.com/maulusck/windnf"
 
 [project.scripts]
-winrpmdepscalc = "winrpmdepscalc.cli:main"
+windnf = "windnf.cli:main"
 
 [tool.setuptools_scm]
 # optionally configure setuptools_scm here

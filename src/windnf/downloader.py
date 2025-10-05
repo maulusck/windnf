@@ -7,7 +7,7 @@ from typing import Union
 import requests
 from tqdm import tqdm
 
-_logger = logging.getLogger("winrpmdepscalc")
+_logger = logging.getLogger("windnf")
 
 
 class DownloaderType(Enum):

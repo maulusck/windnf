@@ -1,7 +1,7 @@
 import logging
 
 
-class LogColors:
+class Colors:
     RESET = "\033[0m"
     RED = "\033[31m"
     GREEN = "\033[32m"
@@ -14,20 +14,20 @@ class LogColors:
 
 class ColorFormatter(logging.Formatter):
     COLOR_MAP = {
-        logging.DEBUG: LogColors.CYAN,
-        logging.INFO: LogColors.GREEN,
-        logging.WARNING: LogColors.YELLOW,
-        logging.ERROR: LogColors.RED,
-        logging.CRITICAL: LogColors.RED + LogColors.BOLD,
+        logging.DEBUG: Colors.CYAN,
+        logging.INFO: Colors.GREEN,
+        logging.WARNING: Colors.YELLOW,
+        logging.ERROR: Colors.RED,
+        logging.CRITICAL: Colors.RED + Colors.BOLD,
     }
 
     def format(self, record):
-        color = self.COLOR_MAP.get(record.levelno, LogColors.RESET)
+        color = self.COLOR_MAP.get(record.levelno, Colors.RESET)
         message = super().format(record)
-        return f"{color}{message}{LogColors.RESET}"
+        return f"{color}{message}{Colors.RESET}"
 
 
-_logger = logging.getLogger("winrpmdepscalc")
+_logger = logging.getLogger("windnf")
 _logger.setLevel(logging.DEBUG)
 ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)

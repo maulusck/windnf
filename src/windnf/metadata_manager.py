@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 from .db_manager import DbManager
 from .downloader import Downloader
 
-_logger = logging.getLogger("winrpmdepscalc")
+_logger = logging.getLogger("windnf")
 
 
 def extract_namespaces(xml_content: str) -> dict:

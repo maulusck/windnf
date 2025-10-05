@@ -2,7 +2,7 @@ import configparser
 import logging
 from pathlib import Path
 
-_logger = logging.getLogger("winrpmdepscalc")
+_logger = logging.getLogger("windnf")
 
 
 class Config:
