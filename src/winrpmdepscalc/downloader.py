@@ -2,7 +2,7 @@ import logging
 import subprocess
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
 import requests
 from tqdm import tqdm
@@ -21,13 +21,17 @@ class DownloaderType(Enum):
 
 class Downloader:
     def __init__(
-        self, downloader_type: str = "powershell", proxy_url: Optional[str] = None, skip_ssl_verify: bool = True
+        self,
+        downloader_type: str = "powershell",
+        proxy_url: str = None,
+        skip_ssl_verify: bool = True,
     ) -> None:
         dt = downloader_type.lower()
         if not DownloaderType.has_value(dt):
             allowed = ", ".join(d.value for d in DownloaderType)
             raise ValueError(f"Invalid downloader '{downloader_type}'. Allowed: {allowed}")
         self.downloader_type = DownloaderType(dt)
+
         if self.downloader_type == DownloaderType.PYTHON:
             self.session = requests.Session()
             if proxy_url:
@@ -45,6 +49,7 @@ class Downloader:
             self._download_python(url, output_file)
 
     def _download_powershell(self, url: str, output_file: Union[str, Path]) -> None:
+        # Powershell download script: uses .NET WebClient with default network credentials proxy support
         ps_script = (
             f"$wc = New-Object System.Net.WebClient; "
             f"$wc.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials; "
@@ -60,7 +65,7 @@ class Downloader:
         if not self.session:
             raise RuntimeError("Python downloader session not initialized")
         try:
-            with self.session.get(url, stream=True) as resp:
+            with self.session.get(url, stream=True, timeout=90) as resp:
                 resp.raise_for_status()
                 total = int(resp.headers.get("content-length", 0))
                 with open(output_file, "wb") as f, tqdm(

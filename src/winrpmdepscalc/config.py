@@ -1,40 +1,60 @@
-import tempfile
+import configparser
+import logging
 from pathlib import Path
+
+_logger = logging.getLogger("winrpmdepscalc")
 
 
 class Config:
     def __init__(self) -> None:
-        self.REPO_BASE_URL: str = "https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/"
-        self.REPOMD_XML: str = "repodata/repomd.xml"
-        self.TEMP_DOWNLOAD_DIR: Path = Path(tempfile.gettempdir())
-        self.LOCAL_REPOMD_FILE: Path = self.TEMP_DOWNLOAD_DIR / "repomd.xml"
-        self.LOCAL_XZ_FILE: Path = self.TEMP_DOWNLOAD_DIR / "primary.xml.xz"
-        self.LOCAL_XML_FILE: Path = self.TEMP_DOWNLOAD_DIR / "primary.xml"
-        self.PACKAGE_COLUMNS: int = 4
-        self.PACKAGE_COLUMN_WIDTH: int = 30
-        self.DOWNLOAD_DIR: Path = Path("rpms")
-        self.SKIP_SSL_VERIFY: bool = True
-        self.SUPPORT_WEAK_DEPS: bool = False
-        self.ONLY_LATEST_VERSION: bool = True
-        self.DOWNLOADER: str = "powershell"
+        self.config_dir = Path.home() / ".windnf"
+        self.config_dir.mkdir(exist_ok=True)
+        self.config_path = self.config_dir / "windnf.conf"
 
-    def update_from_dict(self, data: dict) -> None:
-        for key, value in data.items():
-            key_upper = key.upper()
-            if hasattr(self, key_upper):
-                if key_upper == "TEMP_DOWNLOAD_DIR":
-                    temp_dir = Path(value)
-                    self.TEMP_DOWNLOAD_DIR = temp_dir
-                    if self.LOCAL_REPOMD_FILE.parent != temp_dir:
-                        self.LOCAL_REPOMD_FILE = temp_dir / "repomd.xml"
-                        self.LOCAL_XZ_FILE = temp_dir / "primary.xml.xz"
-                        self.LOCAL_XML_FILE = temp_dir / "primary.xml"
-                else:
-                    setattr(self, key_upper, value if not isinstance(getattr(self, key_upper), Path) else Path(value))
+        self.downloader = "powershell"
+        self.skip_ssl_verify = True
+        self.db_path = self.config_dir / "windnf.sqlite"
+        self.download_path = self.config_dir / "downloads"  # default download path
 
-    def to_dict(self) -> dict:
-        return {
-            k: (str(getattr(self, k)) if isinstance(getattr(self, k), Path) else getattr(self, k))
-            for k in dir(self)
-            if k.isupper()
+        self.load()
+
+    def load(self) -> None:
+        parser = configparser.ConfigParser()
+        if not self.config_path.exists():
+            _logger.warning(f"Config file {self.config_path} not found. Creating default config there.")
+            self._write_default_config()
+
+        parser.read(self.config_path)
+        self.downloader = parser.get("general", "downloader", fallback=self.downloader)
+        self.skip_ssl_verify = parser.getboolean("general", "skip_ssl_verify", fallback=self.skip_ssl_verify)
+        self.db_path = Path(parser.get("general", "db_path", fallback=str(self.db_path)))
+
+        # read download_path from config or fallback to default
+        dp = parser.get("general", "download_path", fallback=str(self.download_path))
+        self.download_path = Path(dp)
+        # Ensure the directory exists
+        self.download_path.mkdir(parents=True, exist_ok=True)
+
+    def _write_default_config(self) -> None:
+        parser = configparser.ConfigParser()
+        parser["general"] = {
+            "downloader": self.downloader,
+            "skip_ssl_verify": str(self.skip_ssl_verify).lower(),
+            "db_path": str(self.db_path),
+            "download_path": str(self.download_path),
         }
+        with open(self.config_path, "w") as configfile:
+            parser.write(configfile)
+        _logger.info(f"Default config file written to {self.config_path}")
+
+    def save(self) -> None:
+        parser = configparser.ConfigParser()
+        parser["general"] = {
+            "downloader": self.downloader,
+            "skip_ssl_verify": str(self.skip_ssl_verify).lower(),
+            "db_path": str(self.db_path),
+            "download_path": str(self.download_path),
+        }
+        with open(self.config_path, "w") as configfile:
+            parser.write(configfile)
+        _logger.info(f"Config saved to {self.config_path}")
