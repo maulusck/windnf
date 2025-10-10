@@ -89,20 +89,43 @@ def confirm_action(prompt: str) -> bool:
 
 
 def search(patterns: List[str], repo: Optional[str], showduplicates: bool) -> None:
-    """Search for packages matching patterns, limited to specified repos if given."""
     repo_names = repo.split(",") if repo else None
     results = db.search_packages(patterns, repo_names)
+
     if not results:
         print("No packages found matching search criteria.")
         return
 
-    printed = set()
-    for pkg in results:
-        key = (pkg["name"], pkg["version"], pkg["release"], pkg["epoch"], pkg["arch"])
-        if not showduplicates and key in printed:
-            continue
-        print(f"{pkg['name']} {pkg['version']}-{pkg['release']} ({pkg['arch']}) repo: {pkg['repo_name']}")
-        printed.add(key)
+    if showduplicates:
+        # Print all matching packages as-is
+        for pkg in results:
+            print(f"{pkg['name']} {pkg['version']}-{pkg['release']} ({pkg['arch']}) repo: {pkg['repo_name']}")
+    else:
+        # Only print the latest version per package name
+        latest_per_name = {}
+        for pkg in results:
+            name = pkg["name"]
+            key = (
+                int(pkg["epoch"]),
+                pkg["version"],
+                pkg["release"],
+            )
+            # Update if new version is greater (epoch, version, release)
+            # Version comparison here assumes lexical order, may customize if needed
+            if name not in latest_per_name:
+                latest_per_name[name] = pkg
+            else:
+                # Compare tuple keys lexically to pick latest version
+                current_key = (
+                    int(latest_per_name[name]["epoch"]),
+                    latest_per_name[name]["version"],
+                    latest_per_name[name]["release"],
+                )
+                if key > current_key:
+                    latest_per_name[name] = pkg
+
+        for pkg in latest_per_name.values():
+            print(f"{pkg['name']} {pkg['version']}-{pkg['release']} ({pkg['arch']}) repo: {pkg['repo_name']}")
 
 
 def resolve(packages: List[str], repo: Optional[str], recurse: bool, weakdeps: bool) -> None:
