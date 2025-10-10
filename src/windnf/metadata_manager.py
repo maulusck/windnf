@@ -39,6 +39,9 @@ class MetadataManager:
         base_url = repo_row["base_url"]
         repomd_url = repo_row["repomd_url"]
 
+        # Always join repomd_url with base_url to form absolute URL
+        repomd_url = urljoin(base_url, repomd_url)
+
         _logger.info(f"Syncing repository '{name}' from {repomd_url}")
 
         repomd_content = self._download_to_memory(repomd_url)
