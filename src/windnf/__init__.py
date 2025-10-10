@@ -1,14 +1,18 @@
+"""
+windnf - A lightweight package management system for Windows.
+
+This package provides commands and utilities to manage
+software repositories and packages.
+
+Modules:
+- cli: Command-line interface entry point.
+- operations: Core command implementations.
+- metadata_manager: Repository metadata handling.
+- db_manager: SQLite database interactions.
+- config: Configuration management.
+- downloader: Download engine abstraction.
+"""
+
 from .cli import main
-from .config import Config
-from .downloader import Downloader, DownloaderType
-from .metadata_manager import MetadataManager
-from .operations import (
-    add_repo,
-    delete_repo,
-    download_packages,
-    list_repos,
-    resolve_dependencies_multiple,
-    resolve_dependencies_single,
-    search_packages,
-    sync_repos,
-)
+
+__all__ = ["main"]

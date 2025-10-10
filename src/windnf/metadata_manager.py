@@ -1,16 +1,17 @@
 import bz2
 import gzip
 import io
-import logging
 import lzma
 import xml.etree.ElementTree as ET
 from typing import Optional
 from urllib.parse import urljoin
 
+from .config import Config
 from .db_manager import DbManager
 from .downloader import Downloader
+from .logger import setup_logger
 
-_logger = logging.getLogger("windnf")
+_logger = setup_logger()
 
 
 def extract_namespaces(xml_content: str) -> dict:
@@ -28,9 +29,9 @@ def qname(ns: str, tag: str) -> str:
 
 
 class MetadataManager:
-    def __init__(self, downloader: Downloader, db_manager: DbManager) -> None:
+    def __init__(self, downloader: Downloader, db: DbManager) -> None:
         self.downloader = downloader
-        self.db = db_manager
+        self.db = db
 
     def sync_repo(self, repo_row) -> None:
         repo_id = repo_row["id"]
@@ -47,6 +48,7 @@ class MetadataManager:
 
         repomd_str = repomd_content.decode("utf-8") if isinstance(repomd_content, bytes) else repomd_content
         repomd_root = ET.fromstring(repomd_str)
+
         namespaces = extract_namespaces(repomd_str)
         repo_ns = namespaces.get("default", "")
 
@@ -93,7 +95,7 @@ class MetadataManager:
 
         from datetime import datetime
 
-        self.db.update_repo_timestamp(name, datetime.utcnow().isoformat())
+        self.db.update_repo_timestamp(repo_id, datetime.utcnow().isoformat())
         _logger.info(f"Repository '{name}' sync completed.")
 
     def _download_to_memory(self, url: str) -> Optional[bytes]:
@@ -119,7 +121,12 @@ class MetadataManager:
                 return None
 
     def _decompress_data(self, data: bytes) -> Optional[str]:
-        for name, decompressor in [("gzip", gzip.decompress), ("bzip2", bz2.decompress), ("xz", lzma.decompress)]:
+        decompressors = [
+            ("gzip", gzip.decompress),
+            ("bzip2", bz2.decompress),
+            ("xz", lzma.decompress),
+        ]
+        for name, decompressor in decompressors:
             try:
                 decompressed = decompressor(data)
                 _logger.info(f"Decompressed primary XML with {name}")

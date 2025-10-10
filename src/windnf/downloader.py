@@ -1,4 +1,3 @@
-import logging
 import subprocess
 from enum import Enum
 from pathlib import Path
@@ -7,7 +6,9 @@ from typing import Union
 import requests
 from tqdm import tqdm
 
-_logger = logging.getLogger("windnf")
+from .logger import setup_logger
+
+_logger = setup_logger()
 
 
 class DownloaderType(Enum):
@@ -20,17 +21,16 @@ class DownloaderType(Enum):
 
 
 class Downloader:
-    def __init__(
-        self,
-        downloader_type: str = "powershell",
-        proxy_url: str = None,
-        skip_ssl_verify: bool = True,
-    ) -> None:
-        dt = downloader_type.lower()
-        if not DownloaderType.has_value(dt):
+    def __init__(self, config) -> None:
+        # Extract configuration values from config object
+        downloader_type = config.downloader.lower()
+        proxy_url = getattr(config, "proxy_url", None)  # in case proxy_url is added later
+        skip_ssl_verify = getattr(config, "skip_ssl_verify", True)
+
+        if not DownloaderType.has_value(downloader_type):
             allowed = ", ".join(d.value for d in DownloaderType)
             raise ValueError(f"Invalid downloader '{downloader_type}'. Allowed: {allowed}")
-        self.downloader_type = DownloaderType(dt)
+        self.downloader_type = DownloaderType(downloader_type)
 
         if self.downloader_type == DownloaderType.PYTHON:
             self.session = requests.Session()
@@ -49,7 +49,6 @@ class Downloader:
             self._download_python(url, output_file)
 
     def _download_powershell(self, url: str, output_file: Union[str, Path]) -> None:
-        # Powershell download script: uses .NET WebClient with default network credentials proxy support
         ps_script = (
             f"$wc = New-Object System.Net.WebClient; "
             f"$wc.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials; "

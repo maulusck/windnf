@@ -1,8 +1,9 @@
 import configparser
-import logging
 from pathlib import Path
 
-_logger = logging.getLogger("windnf")
+from .logger import setup_logger
+
+_logger = setup_logger()
 
 
 class Config:

@@ -27,10 +27,14 @@ class ColorFormatter(logging.Formatter):
         return f"{color}{message}{Colors.RESET}"
 
 
-_logger = logging.getLogger("windnf")
-_logger.setLevel(logging.DEBUG)
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-formatter = ColorFormatter("%(message)s")
-ch.setFormatter(formatter)
-_logger.addHandler(ch)
+def setup_logger(name="windnf", level=logging.DEBUG):
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    ch = logging.StreamHandler()
+    ch.setLevel(level)
+    formatter = ColorFormatter("%(message)s")
+    ch.setFormatter(formatter)
+    # Prevent adding multiple handlers in case of repeated calls
+    if not logger.hasHandlers():
+        logger.addHandler(ch)
+    return logger
