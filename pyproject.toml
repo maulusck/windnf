@@ -16,6 +16,11 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = ["requests", "PyYAML", "tqdm", "urllib3"]
+
+# Optional (development) dependencies
+[project.optional-dependencies]
+dev = ["black", "isort"]
+
 dynamic = ["version"]
 
 [project.urls]
