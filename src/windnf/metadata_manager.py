@@ -1,7 +1,10 @@
+# metadata_manager.py
 import bz2
 import gzip
 import io
 import lzma
+import os
+import tempfile
 import xml.etree.ElementTree as ET
 from typing import Optional
 from urllib.parse import urljoin
@@ -39,7 +42,6 @@ class MetadataManager:
         base_url = repo_row["base_url"]
         repomd_url = repo_row["repomd_url"]
 
-        # Always join repomd_url with base_url to form absolute URL
         repomd_url = urljoin(base_url, repomd_url)
 
         _logger.info(f"Syncing repository '{name}' from {repomd_url}")
@@ -102,8 +104,6 @@ class MetadataManager:
         _logger.info(f"Repository '{name}' sync completed.")
 
     def _download_to_memory(self, url: str) -> Optional[bytes]:
-        import tempfile
-
         if self.downloader.downloader_type.name == "PYTHON":
             try:
                 resp = self.downloader.session.get(url, timeout=60)
@@ -112,16 +112,21 @@ class MetadataManager:
             except Exception as e:
                 _logger.error(f"Downloader error fetching {url}: {e}")
                 return None
-        else:
+        try:
+            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+            self.downloader._download_powershell(url, tmp_path)
+            with open(tmp_path, "rb") as f:
+                content = f.read()
             try:
-                with tempfile.NamedTemporaryFile(delete=True) as tmpfile:
-                    self.downloader._download_powershell(url, tmpfile.name)
-                    tmpfile.flush()
-                    tmpfile.seek(0)
-                    return tmpfile.read()
-            except Exception as e:
-                _logger.error(f"Downloader error fetching {url} via PowerShell: {e}")
-                return None
+                os.remove(tmp_path)
+            except OSError as e:
+                _logger.warning(f"Failed to delete temp file {tmp_path}: {e}")
+
+            return content
+        except Exception as e:
+            _logger.error(f"Downloader error fetching {url} via PowerShell: {e}")
+            return None
 
     def _decompress_data(self, data: bytes) -> Optional[str]:
         decompressors = [

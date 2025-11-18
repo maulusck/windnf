@@ -1,6 +1,7 @@
+# db_manager.py
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from .logger import setup_logger
 
@@ -14,6 +15,9 @@ class DbManager:
         self._configure_pragmas()
         self._init_schema()
 
+    # --------------------------------------------------
+    # Database setup
+    # --------------------------------------------------
     def _configure_pragmas(self) -> None:
         pragmas = [
             "PRAGMA synchronous = OFF;",
@@ -62,7 +66,9 @@ class DbManager:
         with self.conn:
             self.conn.executescript(schema)
 
+    # --------------------------------------------------
     # Repository methods
+    # --------------------------------------------------
     def add_repository(self, name: str, base_url: str, repomd_url: str) -> None:
         with self.conn:
             self.conn.execute(
@@ -75,24 +81,22 @@ class DbManager:
                 """,
                 (name, base_url, repomd_url),
             )
+        _logger.info(f"Repository '{name}' added/updated.")
 
     def update_repo_timestamp(self, repo_id: int, timestamp: str) -> None:
         with self.conn:
             self.conn.execute("UPDATE repositories SET last_updated = ? WHERE id = ?", (timestamp, repo_id))
 
     def get_repositories(self) -> List[sqlite3.Row]:
-        c = self.conn.cursor()
-        c.execute("SELECT * FROM repositories ORDER BY name")
-        return c.fetchall()
+        return self.conn.execute("SELECT * FROM repositories ORDER BY name").fetchall()
 
     def get_repo_by_name(self, name: str) -> Optional[sqlite3.Row]:
-        c = self.conn.cursor()
-        c.execute("SELECT * FROM repositories WHERE name = ?", (name,))
-        return c.fetchone()
+        return self.conn.execute("SELECT * FROM repositories WHERE name = ?", (name,)).fetchone()
 
     def delete_repository(self, repo_id: int) -> None:
         with self.conn:
             self.conn.execute("DELETE FROM repositories WHERE id = ?", (repo_id,))
+        _logger.info(f"Repository id={repo_id} deleted.")
 
     def clear_repo_packages(self, repo_id: int) -> None:
         with self.conn:
@@ -103,8 +107,11 @@ class DbManager:
                 "DELETE FROM requires WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)", (repo_id,)
             )
             self.conn.execute("DELETE FROM packages WHERE repo_id = ?", (repo_id,))
+        _logger.info(f"All packages cleared for repo_id={repo_id}.")
 
+    # --------------------------------------------------
     # Package methods
+    # --------------------------------------------------
     def add_package(
         self, repo_id: int, name: str, version: str, release: str, epoch: int, arch: str, filepath: str
     ) -> int:
@@ -119,14 +126,13 @@ class DbManager:
             if cur.lastrowid:
                 return cur.lastrowid
 
-            cur = self.conn.execute(
+            row = self.conn.execute(
                 """
                 SELECT id FROM packages
                 WHERE repo_id = ? AND name = ? AND version = ? AND release = ? AND epoch = ? AND arch = ?
                 """,
                 (repo_id, name, version, release, epoch, arch),
-            )
-            row = cur.fetchone()
+            ).fetchone()
             return row["id"] if row else 0
 
     def add_provides(self, package_id: int, provides: Set[str]) -> None:
@@ -154,6 +160,9 @@ class DbManager:
             return name, version
         return pkg_version, None
 
+    # --------------------------------------------------
+    # Search and info
+    # --------------------------------------------------
     def search_packages(
         self,
         patterns: Union[str, List[str]],
@@ -161,39 +170,47 @@ class DbManager:
         exact_version: bool = False,
     ) -> List[sqlite3.Row]:
         """
-        Search packages by name or name:version patterns.
+        Search for packages by name patterns, supporting wildcards (*).
+        - patterns: single string or list of strings; can include '*' as a wildcard
+        - repo_names: optional list of repository names to filter
+        - exact_version: if True, match both name and version exactly when provided
 
-        patterns: single or list of 'pkg' or 'pkg:version' strings.
-        repo_names: optional list of repository names to filter results.
-        exact_version: if True, matches exact version; else ignores version in pattern.
+        Returns a list of sqlite3.Row objects with package info.
         """
         if isinstance(patterns, str):
             patterns = [patterns]
 
         c = self.conn.cursor()
-
         conditions = []
         params = []
 
+        # Filter by repositories if provided
         repo_filter = ""
         if repo_names:
             placeholders = ",".join("?" for _ in repo_names)
             repo_filter = f"AND r.name IN ({placeholders})"
             params.extend(repo_names)
 
-        name_version_conditions = []
+        # Build conditions for each pattern
         for pat in patterns:
             name, version = self._parse_pkg_version(pat)
             if version and exact_version:
-                name_version_conditions.append("(p.name = ? AND p.version = ?)")
+                # Exact match on name + version
+                conditions.append("(p.name = ? AND p.version = ?)")
                 params.extend([name, version])
             else:
-                # Match just by package name substring
-                name_version_conditions.append("p.name LIKE ?")
-                params.append(f"%{name}%")
+                # Convert '*' to '%' for SQL LIKE
+                name_like = name.replace("*", "%")
+                # If user did not provide any wildcard, match substring
+                if "%" not in name_like:
+                    name_like = f"%{name_like}%"
+                conditions.append("p.name LIKE ?")
+                params.append(name_like)
 
-        where_clause = " OR ".join(name_version_conditions)
+        if not conditions:
+            return []
 
+        where_clause = " OR ".join(conditions)
         sql = f"""
         SELECT p.*, r.name as repo_name
         FROM packages p
@@ -201,7 +218,6 @@ class DbManager:
         WHERE ({where_clause}) {repo_filter}
         ORDER BY p.epoch DESC, p.version DESC, p.release DESC, p.name ASC
         """
-
         c.execute(sql, params)
         return c.fetchall()
 
@@ -211,9 +227,6 @@ class DbManager:
         package_name: str,
         version: Optional[str] = None,
     ) -> Optional[sqlite3.Row]:
-        """
-        Retrieve detailed package info by repo, package name, and optional version.
-        """
         c = self.conn.cursor()
         if version:
             c.execute(
@@ -242,9 +255,6 @@ class DbManager:
         provide_name: str,
         repo_names: Optional[List[str]] = None,
     ) -> List[sqlite3.Row]:
-        """
-        Find all packages that provide a given capability, optionally filtered by repo names.
-        """
         c = self.conn.cursor()
         query = """
             SELECT p.*, r.name as repo_name FROM packages p
@@ -261,16 +271,15 @@ class DbManager:
         c.execute(query, params)
         return c.fetchall()
 
+    # --------------------------------------------------
+    # Dependency resolution
+    # --------------------------------------------------
     def get_dependencies_for_package(
         self,
         package_id: int,
         include_weak: bool = False,
         recurse: bool = False,
     ) -> Set[int]:
-        """
-        Get required package IDs for a package.
-        Can include weak dependencies and recurse into dependencies' dependencies.
-        """
         dependencies = set()
         to_process = {package_id}
 
@@ -283,7 +292,6 @@ class DbManager:
                 WHERE req.package_id = ?
             """
             params = [current_id]
-
             if not include_weak:
                 query += " AND req.is_weak = 0"
 
@@ -292,8 +300,93 @@ class DbManager:
 
             new_ids = required_ids - dependencies
             dependencies.update(new_ids)
-
             if recurse:
                 to_process.update(new_ids)
 
         return dependencies
+
+    # --------------------------------------------------
+    # Bulk package insertion (optimized for reposync)
+    # --------------------------------------------------
+    def add_packages_bulk(
+        self,
+        repo_id: int,
+        packages: List[Dict],
+    ) -> None:
+        """
+        Add multiple packages efficiently in a single transaction.
+        Each package dict must have keys:
+        name, version, release, epoch, arch, filepath, provides (set), requires (set), weak_requires (set)
+        """
+        if not packages:
+            return
+
+        _logger.info(f"Bulk inserting {len(packages)} packages for repo_id={repo_id}")
+        try:
+            with self.conn:
+                # Insert packages
+                pkg_data = [
+                    (
+                        repo_id,
+                        pkg.get("name", ""),
+                        pkg.get("version", ""),
+                        pkg.get("release", ""),
+                        pkg.get("epoch", 0),
+                        pkg.get("arch", ""),
+                        pkg.get("filepath", ""),
+                    )
+                    for pkg in packages
+                ]
+                self.conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO packages(
+                        repo_id, name, version, release, epoch, arch, filepath
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    pkg_data,
+                )
+
+                # Fetch package IDs
+                c = self.conn.cursor()
+                c.execute("SELECT id, name, version, release, epoch, arch FROM packages WHERE repo_id = ?", (repo_id,))
+                db_packages = {
+                    (row["name"], row["version"], row["release"], row["epoch"], row["arch"]): row["id"]
+                    for row in c.fetchall()
+                }
+
+                # Prepare provides/requires
+                provides_list, requires_list = [], []
+                for pkg in packages:
+                    key = (
+                        pkg.get("name", ""),
+                        pkg.get("version", ""),
+                        pkg.get("release", ""),
+                        pkg.get("epoch", 0),
+                        pkg.get("arch", ""),
+                    )
+                    pkg_id = db_packages.get(key)
+                    if not pkg_id:
+                        continue
+
+                    for p in pkg.get("provides", set()):
+                        provides_list.append((pkg_id, p))
+                    for r in pkg.get("requires", set()):
+                        requires_list.append((pkg_id, r, 0))
+                    for r in pkg.get("weak_requires", set()):
+                        requires_list.append((pkg_id, r, 1))
+
+                if provides_list:
+                    self.conn.executemany(
+                        "INSERT OR IGNORE INTO provides(package_id, provide_name) VALUES (?, ?)",
+                        provides_list,
+                    )
+                if requires_list:
+                    self.conn.executemany(
+                        "INSERT OR IGNORE INTO requires(package_id, require_name, is_weak) VALUES (?, ?, ?)",
+                        requires_list,
+                    )
+
+            _logger.info(f"Bulk insert completed for repo_id={repo_id}")
+        except Exception as e:
+            _logger.exception(f"Failed bulk insert for repo_id={repo_id}: {e}")
+            raise
