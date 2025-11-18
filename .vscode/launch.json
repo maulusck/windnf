@@ -2,25 +2,25 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Add CentOS9 Repo",
+            "name": "Add EPEL9 Repo",
             "type": "debugpy",
             "request": "launch",
             "module": "windnf.cli",
             "args": [
                 "repoadd",
-                "centos9",
-                "https://mirror.centos.org/centos/9/BaseOS/x86_64/os/"
+                "epel9",
+                "https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/"
             ],
             "console": "integratedTerminal"
         },
         {
-            "name": "Sync CentOS9 Repo",
+            "name": "Sync EPEL9 Repo",
             "type": "debugpy",
             "request": "launch",
             "module": "windnf.cli",
             "args": [
                 "reposync",
-                "centos9"
+                "epel9"
             ],
             "console": "integratedTerminal"
         },
@@ -35,18 +35,18 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "Delete CentOS9 Repo",
+            "name": "Delete EPEL9 Repo",
             "type": "debugpy",
             "request": "launch",
             "module": "windnf.cli",
             "args": [
                 "repodel",
-                "centos9"
+                "epel9"
             ],
             "console": "integratedTerminal"
         },
         {
-            "name": "Search package 'bash' in centos9",
+            "name": "Search package 'bash' in EPEL9",
             "type": "debugpy",
             "request": "launch",
             "module": "windnf.cli",
@@ -54,7 +54,7 @@
                 "search",
                 "bash",
                 "--repo",
-                "centos9"
+                "epel9"
             ],
             "console": "integratedTerminal"
         },
@@ -80,7 +80,7 @@
                 "resolve",
                 "bash",
                 "--repo",
-                "centos9",
+                "epel9",
                 "--recurse",
                 "--weakdeps"
             ],
@@ -107,7 +107,7 @@
                 "download",
                 "bash",
                 "--repo",
-                "centos9",
+                "epel9",
                 "--alldeps"
             ],
             "console": "integratedTerminal"

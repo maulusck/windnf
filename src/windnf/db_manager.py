@@ -169,14 +169,6 @@ class DbManager:
         repo_names: Optional[List[str]] = None,
         exact_version: bool = False,
     ) -> List[sqlite3.Row]:
-        """
-        Search for packages by name patterns, supporting wildcards (*).
-        - patterns: single string or list of strings; can include '*' as a wildcard
-        - repo_names: optional list of repository names to filter
-        - exact_version: if True, match both name and version exactly when provided
-
-        Returns a list of sqlite3.Row objects with package info.
-        """
         if isinstance(patterns, str):
             patterns = [patterns]
 
@@ -184,24 +176,14 @@ class DbManager:
         conditions = []
         params = []
 
-        # Filter by repositories if provided
-        repo_filter = ""
-        if repo_names:
-            placeholders = ",".join("?" for _ in repo_names)
-            repo_filter = f"AND r.name IN ({placeholders})"
-            params.extend(repo_names)
-
         # Build conditions for each pattern
         for pat in patterns:
             name, version = self._parse_pkg_version(pat)
             if version and exact_version:
-                # Exact match on name + version
                 conditions.append("(p.name = ? AND p.version = ?)")
                 params.extend([name, version])
             else:
-                # Convert '*' to '%' for SQL LIKE
                 name_like = name.replace("*", "%")
-                # If user did not provide any wildcard, match substring
                 if "%" not in name_like:
                     name_like = f"%{name_like}%"
                 conditions.append("p.name LIKE ?")
@@ -211,6 +193,14 @@ class DbManager:
             return []
 
         where_clause = " OR ".join(conditions)
+
+        # Add repo filter
+        repo_filter = ""
+        if repo_names:
+            placeholders = ",".join("?" for _ in repo_names)
+            repo_filter = f"AND r.name IN ({placeholders})"
+            params.extend(repo_names)
+
         sql = f"""
         SELECT p.*, r.name as repo_name
         FROM packages p
