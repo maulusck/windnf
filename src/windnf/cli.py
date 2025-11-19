@@ -55,7 +55,7 @@ def main():
     # repodel
     # ===============================================================
     p_repodel = subparsers.add_parser("repodel", help="Delete repository and its packages")
-    p_repodel.add_argument("name", nargs="?", help="Repository name to delete")
+    p_repodel.add_argument("names", nargs="*", help="Repository name(s) to delete")
     p_repodel.add_argument("--all", "-A", action="store_true", help="Delete all repositories")
     p_repodel.add_argument("--force", "-f", action="store_true", help="Force deletion")
     p_repodel.set_defaults(func=operations.repodel)
@@ -142,11 +142,12 @@ def main():
     if args.command == "reposync":
         if args.all and args.names:
             parser.error("reposync: cannot specify names together with --all.")
+
     if args.command == "repodel":
-        if args.name and args.all:
-            parser.error("repodel: cannot specify a name together with --all.")
-        if not args.name and not args.all:
-            parser.error("repodel: specify a repository name or use --all.")
+        if args.names and args.all:
+            parser.error("repodel: cannot specify names together with --all.")
+        if not args.names and not args.all:
+            parser.error("repodel: specify one or more repository names or use --all.")
 
     # ===============================================================
     # Dispatch
@@ -162,7 +163,7 @@ def main():
         return args.func(repo_names, args.all)
 
     elif args.command == "repodel":
-        return args.func(args.name, args.force, args.all)
+        return args.func(args.names, args.force, args.all)
 
     elif args.command == "search":
         return args.func(patterns=args.patterns, repoids=args.repoids, showduplicates=args.showduplicates)

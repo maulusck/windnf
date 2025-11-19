@@ -285,7 +285,7 @@ class MetadataManager:
                 _logger.info(f"{percent:.2f}% parsed: {count}/{total_packages}")
 
         # Save to database
-        pkg_ids = self.db.add_packages_bulk(repo_id, [p[0] for p in packages_data])
+        pkg_ids = self.db.add_packages(repo_id, [p[0] for p in packages_data])
 
         # Insert dependencies
         for i, pkg_id in enumerate(pkg_ids):

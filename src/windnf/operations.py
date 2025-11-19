@@ -58,23 +58,38 @@ def reposync(names: Optional[List[str]] = None, all_: bool = False):
         metadata_mgr.sync_repo(repo)
 
 
-def repodel(name: Optional[str] = None, force: bool = False, all_: bool = False):
+def repodel(names=None, force: bool = False, all_: bool = False):
+    """
+    Delete one or more repositories and their packages.
+    - names: list of repository names to delete
+    - force: skip confirmation
+    - all_: delete all repositories
+    """
     if all_:
-        if force or confirm("Delete ALL repositories and packages?"):
-            for r in db.get_repositories():
-                db.delete_repository(r["id"])
-            _logger.info("Deleted all repositories.")
-        return
-    if not name:
-        print("Error: repository name required (or use --all)")
-        sys.exit(1)
-    repo = db.get_repo_by_name(name)
-    if not repo:
-        print(f"Repository '{name}' not found.")
-        sys.exit(1)
-    if force or confirm(f"Delete repository '{name}'?"):
-        db.delete_repository(repo["id"])
-        _logger.info(f"Deleted repository '{name}'")
+        repos = db.get_repositories()
+        if not repos:
+            _logger.info("No repositories to delete.")
+            return
+        target_names = [r["name"] for r in repos]
+        if not force and not confirm("Delete ALL repositories and their packages?"):
+            _logger.info("Operation canceled.")
+            return
+    else:
+        if not names:
+            print("Error: specify one or more repository names or use --all")
+            sys.exit(1)
+        target_names = []
+        for name in names:
+            repo = db.get_repo_by_name(name)
+            if not repo:
+                print(f"Repository '{name}' not found.")
+                continue
+            if force or confirm(f"Delete repository '{name}' and its packages?"):
+                target_names.append(name)
+
+    # Delete each repository
+    for name in target_names:
+        db.delete_repository(name)
 
 
 def confirm(prompt: str) -> bool:
@@ -135,7 +150,36 @@ def resolve(
         print("No matching packages.")
         return
 
-    resolved_pkgs = db.resolve_dependencies(initial, include_weak=weakdeps, recursive=recursive)
+    # -----------------------------
+    # Recursive resolution logic
+    # -----------------------------
+    all_packages = db.get_all_packages()
+    provides_map = db.get_provides_map()
+    requires_map = db.get_requires_map()
+
+    resolved_ids: Set[int] = set()
+    to_process: List[int] = [p["id"] for p in initial]
+
+    while to_process:
+        current_id = to_process.pop()
+        if current_id in resolved_ids:
+            continue
+        resolved_ids.add(current_id)
+
+        if recursive:
+            for req_name, is_weak in requires_map.get(current_id, []):
+                if not weakdeps and is_weak:
+                    continue
+                candidate_ids = provides_map.get(req_name, set())
+                # fallback: match package name directly if not provided
+                pkg_row = next((p for p in all_packages.values() if p["name"] == req_name), None)
+                if pkg_row:
+                    candidate_ids.add(pkg_row["id"])
+                for cid in candidate_ids:
+                    if cid not in resolved_ids:
+                        to_process.append(cid)
+
+    resolved_pkgs = [all_packages[pid] for pid in resolved_ids if pid in all_packages]
 
     if arch:
         resolved_pkgs = [p for p in resolved_pkgs if p["arch"] == arch]

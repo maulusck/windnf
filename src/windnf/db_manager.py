@@ -122,10 +122,15 @@ class DbManager:
     def get_repo_by_name(self, name: str) -> Optional[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM repositories WHERE name = ?", (name,)).fetchone()
 
-    def delete_repository(self, repo_id: int) -> None:
-        with self.conn:
-            self.conn.execute("DELETE FROM repositories WHERE id = ?", (repo_id,))
-        _logger.info(f"Repository id={repo_id} deleted.")
+    def delete_repository(self, repo_name: str) -> None:
+        repo = self.get_repo_by_name(repo_name)
+        if not repo:
+            _logger.warning(f"Repository '{repo_name}' not found.")
+            return
+
+        repo_id = repo["id"]
+        self.clear_repo_packages(repo_id)
+        _logger.info(f"Repository '{repo_name}' fully removed (including packages).")
 
     def clear_repo_packages(self, repo_id: int) -> None:
         """Safely delete all packages and related data for a repo."""
@@ -143,7 +148,7 @@ class DbManager:
     # -------------------------------
     # Package Methods
     # -------------------------------
-    def add_packages_bulk(self, repo_id: int, packages: List[Dict]) -> List[int]:
+    def add_packages(self, repo_id: int, packages: List[Dict]) -> List[int]:
         if not packages:
             return []
 
@@ -218,7 +223,7 @@ class DbManager:
             )
 
     # -------------------------------
-    # Search and Info Methods
+    # Search Methods
     # -------------------------------
     def search_packages(
         self,
@@ -292,55 +297,22 @@ class DbManager:
         return self.conn.execute(sql, params).fetchone()
 
     # -------------------------------
-    # Unified Dependency Resolution
+    # Dependency Helpers
     # -------------------------------
-    def resolve_dependencies(
-        self, packages: List[Union[str, sqlite3.Row]], include_weak: bool = False, recursive: bool = False
-    ) -> List[sqlite3.Row]:
-        """Returns a list of package rows including all dependencies."""
-        all_packages = {p["id"]: p for p in self.conn.execute("SELECT * FROM packages").fetchall()}
+    def get_all_packages(self) -> Dict[int, sqlite3.Row]:
+        return {p["id"]: p for p in self.conn.execute("SELECT * FROM packages").fetchall()}
 
+    def get_provides_map(self) -> Dict[str, Set[int]]:
         provides_map: Dict[str, Set[int]] = {}
         for row in self.conn.execute("SELECT package_id, provide_name FROM provides"):
             provides_map.setdefault(row["provide_name"], set()).add(row["package_id"])
+        return provides_map
 
+    def get_requires_map(self) -> Dict[int, List[Tuple[str, bool]]]:
         requires_map: Dict[int, List[Tuple[str, bool]]] = {}
         for row in self.conn.execute("SELECT package_id, require_name, is_weak FROM requires"):
             requires_map.setdefault(row["package_id"], []).append((row["require_name"], bool(row["is_weak"])))
-
-        resolved_ids: Set[int] = set()
-        to_process: List[int] = []
-
-        for pkg in packages:
-            if isinstance(pkg, sqlite3.Row):
-                to_process.append(pkg["id"])
-            else:
-                row = self.conn.execute(
-                    "SELECT id FROM packages WHERE name = ? ORDER BY epoch DESC, version DESC, release DESC LIMIT 1",
-                    (pkg,),
-                ).fetchone()
-                if row:
-                    to_process.append(row["id"])
-
-        while to_process:
-            current_id = to_process.pop()
-            if current_id in resolved_ids:
-                continue
-            resolved_ids.add(current_id)
-
-            if recursive:
-                for req_name, is_weak in requires_map.get(current_id, []):
-                    if not include_weak and is_weak:
-                        continue
-                    candidate_ids = provides_map.get(req_name, set())
-                    pkg_row = next((p for p in all_packages.values() if p["name"] == req_name), None)
-                    if pkg_row:
-                        candidate_ids.add(pkg_row["id"])
-                    for cid in candidate_ids:
-                        if cid not in resolved_ids:
-                            to_process.append(cid)
-
-        return [all_packages[pid] for pid in resolved_ids if pid in all_packages]
+        return requires_map
 
     # -------------------------------
     # Utilities
