@@ -15,6 +15,9 @@ class DbManager:
         self._configure_pragmas()
         self._init_schema()
 
+    # -------------------------------
+    # Initialization
+    # -------------------------------
     def _configure_pragmas(self) -> None:
         for pragma in [
             "PRAGMA synchronous = OFF;",
@@ -125,20 +128,16 @@ class DbManager:
         _logger.info(f"Repository id={repo_id} deleted.")
 
     def clear_repo_packages(self, repo_id: int) -> None:
+        """Safely delete all packages and related data for a repo."""
+        sql_statements = [
+            "DELETE FROM files WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
+            "DELETE FROM provides WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
+            "DELETE FROM requires WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
+            "DELETE FROM packages WHERE repo_id = ?",
+        ]
         with self.conn:
-            self.conn.execute(
-                "DELETE FROM files WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
-                (repo_id,),
-            )
-            self.conn.execute(
-                "DELETE FROM provides WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
-                (repo_id,),
-            )
-            self.conn.execute(
-                "DELETE FROM requires WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
-                (repo_id,),
-            )
-            self.conn.execute("DELETE FROM packages WHERE repo_id = ?", (repo_id,))
+            for sql in sql_statements:
+                self.conn.execute(sql, (repo_id,))
         _logger.info(f"All packages cleared for repo_id={repo_id}.")
 
     # -------------------------------
@@ -230,7 +229,6 @@ class DbManager:
         if isinstance(patterns, str):
             patterns = [patterns]
 
-        c = self.conn.cursor()
         conditions = []
         params = []
 
@@ -264,8 +262,7 @@ class DbManager:
         WHERE ({where_clause}) {repo_filter}
         ORDER BY p.epoch DESC, p.version DESC, p.release DESC, p.name ASC
         """
-        c.execute(sql, params)
-        return c.fetchall()
+        return self.conn.execute(sql, params).fetchall()
 
     def get_package_info(
         self,
@@ -273,28 +270,26 @@ class DbManager:
         package_name: str,
         version: Optional[str] = None,
     ) -> Optional[sqlite3.Row]:
-        c = self.conn.cursor()
         if version:
-            c.execute(
-                """
-                SELECT p.*, r.name as repo_name FROM packages p
+            sql = """
+                SELECT p.*, r.name as repo_name
+                FROM packages p
                 JOIN repositories r ON p.repo_id = r.id
                 WHERE r.name = ? AND p.name = ? AND p.version = ?
-                """,
-                (repo_name, package_name, version),
-            )
+            """
+            params = (repo_name, package_name, version)
         else:
-            c.execute(
-                """
-                SELECT p.*, r.name as repo_name FROM packages p
+            sql = """
+                SELECT p.*, r.name as repo_name
+                FROM packages p
                 JOIN repositories r ON p.repo_id = r.id
                 WHERE r.name = ? AND p.name = ?
                 ORDER BY p.epoch DESC, p.version DESC, p.release DESC
                 LIMIT 1
-                """,
-                (repo_name, package_name),
-            )
-        return c.fetchone()
+            """
+            params = (repo_name, package_name)
+
+        return self.conn.execute(sql, params).fetchone()
 
     # -------------------------------
     # Unified Dependency Resolution
@@ -302,10 +297,7 @@ class DbManager:
     def resolve_dependencies(
         self, packages: List[Union[str, sqlite3.Row]], include_weak: bool = False, recursive: bool = False
     ) -> List[sqlite3.Row]:
-        """
-        Returns a list of package rows including all dependencies.
-        `packages` can be a list of package names or sqlite3.Row objects.
-        """
+        """Returns a list of package rows including all dependencies."""
         all_packages = {p["id"]: p for p in self.conn.execute("SELECT * FROM packages").fetchall()}
 
         provides_map: Dict[str, Set[int]] = {}
