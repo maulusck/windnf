@@ -317,6 +317,22 @@ class DbManager:
 
     # Dependency resolution
 
+    def get_direct_dependencies(self, package_id: int, include_weak: bool = False) -> Set[int]:
+        c = self.conn.cursor()
+        query = """
+            SELECT DISTINCT pkg.id
+            FROM requires AS req
+            LEFT JOIN provides AS prov ON req.require_name = prov.provide_name
+            LEFT JOIN packages AS pkg ON (prov.package_id = pkg.id OR req.require_name = pkg.name)
+            WHERE req.package_id = ?
+        """
+        params = [package_id]
+        if not include_weak:
+            query += " AND req.is_weak = 0"
+        c.execute(query, params)
+        results = c.fetchall()
+        return {row["id"] for row in results if row["id"] is not None}
+
     def get_dependencies_for_package(
         self,
         package_id: int,

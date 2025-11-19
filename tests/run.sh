@@ -78,11 +78,11 @@ run "$WINDNF search zabbix-agent2"
 # ================================================================
 # RESOLVE
 # ================================================================
-run "$WINDNF resolve bash"
-run "$WINDNF resolve bash --recursive"
-run "$WINDNF resolve bash --weakdeps"
-run "$WINDNF resolve bash --arch x86_64"
-run "$WINDNF resolve bash --repo $REPO1_NAME"
+run "$WINDNF resolve vlc"
+run "$WINDNF resolve vlc --recursive"
+run "$WINDNF resolve vlc --weakdeps"
+run "$WINDNF resolve vlc --arch x86_64"
+run "$WINDNF resolve vlc --repo $REPO1_NAME"
 
 # ================================================================
 # DOWNLOAD

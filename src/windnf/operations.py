@@ -161,27 +161,63 @@ def resolve(
     weakdeps: bool = False,
     arch: Optional[str] = None,
 ):
-    to_process = packages[:]
+    search_repos = repoids if repoids else [r["name"] for r in db.get_repositories()]
     seen = set()
 
-    while to_process:
-        pkg_name = to_process.pop(0)
+    def print_package(pkg_info, prefix="", is_last=True):
+        branch = "└─" if is_last else "├─"
+        print(f"{prefix}{branch} {pkg_info['name']}-{pkg_info['version']}-{pkg_info['release']} ({pkg_info['arch']})")
+
+    def recurse(pkg_name, repo_names, prefix="", is_last=True):
         if pkg_name in seen:
-            continue
+            return
         seen.add(pkg_name)
 
-        pkg_info = db.lookup_exact(pkg_name, repoids=repoids, arch=arch)
+        # locate pkg_info using repos
+        pkg_info = None
+        for repo_name in repo_names:
+            info = db.get_package_info(repo_name, pkg_name)
+            if info and (arch is None or info["arch"] == arch):
+                pkg_info = info
+                break
+
         if not pkg_info:
-            print(f"Package '{pkg_name}' not found.")
-            continue
+            print(f"{prefix}Package '{pkg_name}' not found.")
+            return
 
-        print(f"{pkg_info['name']}-{pkg_info['version']}-{pkg_info['release']} ({pkg_info['arch']})")
+        if prefix == "":
+            # root pkg print without branch prefix
+            print(f"{pkg_info['name']}-{pkg_info['version']}-{pkg_info['release']} ({pkg_info['arch']})")
+        else:
+            print_package(pkg_info, prefix, is_last)
 
-        deps = db.get_dependencies(pkg_info, weakdeps=weakdeps)
-        for d in deps:
-            print(f" ├─ {d}")
-            if recursive and d not in seen:
-                to_process.append(d)
+        if recursive:
+            deps_ids = db.get_direct_dependencies(pkg_info["id"], include_weak=weakdeps)
+            dep_names = []
+            for dep_id in deps_ids:
+                dep_pkg = db.conn.execute("SELECT name FROM packages WHERE id = ?", (dep_id,)).fetchone()
+                if dep_pkg:
+                    dep_names.append(dep_pkg["name"])
+            last_index = len(dep_names) - 1
+            for i, dep_name in enumerate(dep_names):
+                is_last_dep = i == last_index
+                new_prefix = prefix + ("   " if is_last else "│  ")
+                recurse(dep_name, repo_names, new_prefix, is_last_dep)
+        else:
+            # Non-recursive: Print direct dependencies all at once with branches under root
+            deps_ids = db.get_direct_dependencies(pkg_info["id"], include_weak=weakdeps)
+            last_index = len(deps_ids) - 1
+            for i, dep_id in enumerate(deps_ids):
+                dep_pkg = db.conn.execute(
+                    "SELECT name, version, release, arch FROM packages WHERE id = ?", (dep_id,)
+                ).fetchone()
+                if dep_pkg:
+                    is_last_dep = i == last_index
+                    branch = "└─" if is_last_dep else "├─"
+                    print(f"  {branch} {dep_pkg['name']}-{dep_pkg['version']}-{dep_pkg['release']} ({dep_pkg['arch']})")
+
+    for pkg in packages:
+        recurse(pkg, search_repos)
 
 
 # -------------------------------------------------------
