@@ -42,8 +42,9 @@ run "$WINDNF repolist"
 # ================================================================
 # REPOSYNC
 # ================================================================
-run "$WINDNF reposync $REPO1_NAME"
-run "$WINDNF reposync $REPO2_NAME"
+#run "$WINDNF reposync $REPO1_NAME"
+#run "$WINDNF reposync $REPO2_NAME"
+#run "$WINDNF reposync $REPO1_NAME $REPO2_NAME"
 run "$WINDNF reposync --all"
 
 # ================================================================

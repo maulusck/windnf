@@ -15,9 +15,6 @@ class DbManager:
         self._configure_pragmas()
         self._init_schema()
 
-    # --------------------------------------------------
-    # Database setup
-    # --------------------------------------------------
     def _configure_pragmas(self) -> None:
         pragmas = [
             "PRAGMA synchronous = OFF;",
@@ -29,7 +26,7 @@ class DbManager:
             self.conn.execute(pragma)
 
     def _init_schema(self) -> None:
-        schema = """
+        schema_sql = """
         CREATE TABLE IF NOT EXISTS repositories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE NOT NULL,
@@ -37,38 +34,64 @@ class DbManager:
             repomd_url TEXT NOT NULL,
             last_updated TEXT
         );
+
         CREATE TABLE IF NOT EXISTS packages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repo_id INTEGER NOT NULL,
             name TEXT NOT NULL,
-            version TEXT,
-            release TEXT,
+            version TEXT NOT NULL,
+            release TEXT NOT NULL,
             epoch INTEGER DEFAULT 0,
             arch TEXT,
-            filepath TEXT,
+            filepath TEXT NOT NULL,
+            summary TEXT,
+            description TEXT,
+            license TEXT,
+            vendor TEXT,
+            group_name TEXT,
+            buildhost TEXT,
+            sourcerpm TEXT,
+            header_range_start TEXT,
+            header_range_end TEXT,
+            packager TEXT,
+            url TEXT,
+            size_package INTEGER,
+            size_installed INTEGER,
+            size_archive INTEGER,
             UNIQUE(repo_id, name, version, release, epoch, arch),
-            FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+            FOREIGN KEY(repo_id) REFERENCES repositories(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_id INTEGER NOT NULL,
+            filepath TEXT NOT NULL,
+            UNIQUE(package_id, filepath),
+            FOREIGN KEY(package_id) REFERENCES packages(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS provides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             package_id INTEGER NOT NULL,
             provide_name TEXT NOT NULL,
-            FOREIGN KEY (package_id) REFERENCES packages(id) ON DELETE CASCADE,
-            UNIQUE(package_id, provide_name)
+            UNIQUE(package_id, provide_name),
+            FOREIGN KEY(package_id) REFERENCES packages(id) ON DELETE CASCADE
         );
+
         CREATE TABLE IF NOT EXISTS requires (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             package_id INTEGER NOT NULL,
             require_name TEXT NOT NULL,
-            is_weak BOOLEAN DEFAULT 0,
-            FOREIGN KEY (package_id) REFERENCES packages(id) ON DELETE CASCADE,
-            UNIQUE(package_id, require_name, is_weak)
+            is_weak INTEGER DEFAULT 0,
+            UNIQUE(package_id, require_name, is_weak),
+            FOREIGN KEY(package_id) REFERENCES packages(id) ON DELETE CASCADE
         );
         """
         with self.conn:
-            self.conn.executescript(schema)
+            self.conn.executescript(schema_sql)
 
-    # --------------------------------------------------
-    # Repository methods
-    # --------------------------------------------------
+    # Repository Methods
+
     def add_repository(self, name: str, base_url: str, repomd_url: str) -> None:
         with self.conn:
             self.conn.execute(
@@ -85,7 +108,10 @@ class DbManager:
 
     def update_repo_timestamp(self, repo_id: int, timestamp: str) -> None:
         with self.conn:
-            self.conn.execute("UPDATE repositories SET last_updated = ? WHERE id = ?", (timestamp, repo_id))
+            self.conn.execute(
+                "UPDATE repositories SET last_updated = ? WHERE id = ?",
+                (timestamp, repo_id),
+            )
 
     def get_repositories(self) -> List[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM repositories ORDER BY name").fetchall()
@@ -101,39 +127,77 @@ class DbManager:
     def clear_repo_packages(self, repo_id: int) -> None:
         with self.conn:
             self.conn.execute(
-                "DELETE FROM provides WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)", (repo_id,)
+                "DELETE FROM files WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
+                (repo_id,),
             )
             self.conn.execute(
-                "DELETE FROM requires WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)", (repo_id,)
+                "DELETE FROM provides WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
+                (repo_id,),
+            )
+            self.conn.execute(
+                "DELETE FROM requires WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
+                (repo_id,),
             )
             self.conn.execute("DELETE FROM packages WHERE repo_id = ?", (repo_id,))
         _logger.info(f"All packages cleared for repo_id={repo_id}.")
 
-    # --------------------------------------------------
-    # Package methods
-    # --------------------------------------------------
-    def add_package(
-        self, repo_id: int, name: str, version: str, release: str, epoch: int, arch: str, filepath: str
-    ) -> int:
-        with self.conn:
-            cur = self.conn.execute(
-                """
-                INSERT OR IGNORE INTO packages(repo_id, name, version, release, epoch, arch, filepath)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (repo_id, name, version, release, epoch, arch, filepath),
-            )
-            if cur.lastrowid:
-                return cur.lastrowid
+    # Package Methods
 
-            row = self.conn.execute(
+    def add_packages_bulk(self, repo_id: int, packages: List[Dict]) -> List[int]:
+        if not packages:
+            return []
+
+        pkg_data = [
+            (
+                repo_id,
+                p["name"],
+                p["version"],
+                p["release"],
+                p.get("epoch", 0),
+                p.get("arch", "noarch"),
+                p.get("filepath"),
+                p.get("summary"),
+                p.get("description"),
+                p.get("license"),
+                p.get("vendor"),
+                p.get("group"),
+                p.get("buildhost"),
+                p.get("sourcerpm"),
+                p.get("header_range_start"),
+                p.get("header_range_end"),
+                p.get("packager"),
+                p.get("url"),
+                p.get("size_package"),
+                p.get("size_installed"),
+                p.get("size_archive"),
+            )
+            for p in packages
+        ]
+
+        with self.conn:
+            self.conn.executemany(
                 """
-                SELECT id FROM packages
-                WHERE repo_id = ? AND name = ? AND version = ? AND release = ? AND epoch = ? AND arch = ?
+                INSERT OR IGNORE INTO packages(
+                    repo_id, name, version, release, epoch, arch, filepath,
+                    summary, description, license, vendor, group_name, buildhost,
+                    sourcerpm, header_range_start, header_range_end, packager, url,
+                    size_package, size_installed, size_archive
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (repo_id, name, version, release, epoch, arch),
-            ).fetchone()
-            return row["id"] if row else 0
+                pkg_data,
+            )
+
+        rows = self.conn.execute("SELECT id FROM packages WHERE repo_id = ?", (repo_id,)).fetchall()
+        return [row["id"] for row in rows]
+
+    def add_files(self, package_id: int, files: List[str]) -> None:
+        if not files:
+            return
+        with self.conn:
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO files(package_id, filepath) VALUES (?, ?)",
+                [(package_id, f) for f in files],
+            )
 
     def add_provides(self, package_id: int, provides: Set[str]) -> None:
         if not provides:
@@ -153,16 +217,8 @@ class DbManager:
                 [(package_id, r, int(is_weak)) for r in requires],
             )
 
-    def _parse_pkg_version(self, pkg_version: str) -> Tuple[str, Optional[str]]:
-        """Split package:version string into name and version."""
-        if ":" in pkg_version:
-            name, version = pkg_version.split(":", 1)
-            return name, version
-        return pkg_version, None
+    # Search and Info Methods
 
-    # --------------------------------------------------
-    # Search and info
-    # --------------------------------------------------
     def search_packages(
         self,
         patterns: Union[str, List[str]],
@@ -176,7 +232,6 @@ class DbManager:
         conditions = []
         params = []
 
-        # Build conditions for each pattern
         for pat in patterns:
             name, version = self._parse_pkg_version(pat)
             if version and exact_version:
@@ -194,7 +249,6 @@ class DbManager:
 
         where_clause = " OR ".join(conditions)
 
-        # Add repo filter
         repo_filter = ""
         if repo_names:
             placeholders = ",".join("?" for _ in repo_names)
@@ -261,9 +315,8 @@ class DbManager:
         c.execute(query, params)
         return c.fetchall()
 
-    # --------------------------------------------------
     # Dependency resolution
-    # --------------------------------------------------
+
     def get_dependencies_for_package(
         self,
         package_id: int,
@@ -295,88 +348,11 @@ class DbManager:
 
         return dependencies
 
-    # --------------------------------------------------
-    # Bulk package insertion (optimized for reposync)
-    # --------------------------------------------------
-    def add_packages_bulk(
-        self,
-        repo_id: int,
-        packages: List[Dict],
-    ) -> None:
-        """
-        Add multiple packages efficiently in a single transaction.
-        Each package dict must have keys:
-        name, version, release, epoch, arch, filepath, provides (set), requires (set), weak_requires (set)
-        """
-        if not packages:
-            return
+    # Utilities
 
-        _logger.info(f"Bulk inserting {len(packages)} packages for repo_id={repo_id}")
-        try:
-            with self.conn:
-                # Insert packages
-                pkg_data = [
-                    (
-                        repo_id,
-                        pkg.get("name", ""),
-                        pkg.get("version", ""),
-                        pkg.get("release", ""),
-                        pkg.get("epoch", 0),
-                        pkg.get("arch", ""),
-                        pkg.get("filepath", ""),
-                    )
-                    for pkg in packages
-                ]
-                self.conn.executemany(
-                    """
-                    INSERT OR IGNORE INTO packages(
-                        repo_id, name, version, release, epoch, arch, filepath
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    pkg_data,
-                )
-
-                # Fetch package IDs
-                c = self.conn.cursor()
-                c.execute("SELECT id, name, version, release, epoch, arch FROM packages WHERE repo_id = ?", (repo_id,))
-                db_packages = {
-                    (row["name"], row["version"], row["release"], row["epoch"], row["arch"]): row["id"]
-                    for row in c.fetchall()
-                }
-
-                # Prepare provides/requires
-                provides_list, requires_list = [], []
-                for pkg in packages:
-                    key = (
-                        pkg.get("name", ""),
-                        pkg.get("version", ""),
-                        pkg.get("release", ""),
-                        pkg.get("epoch", 0),
-                        pkg.get("arch", ""),
-                    )
-                    pkg_id = db_packages.get(key)
-                    if not pkg_id:
-                        continue
-
-                    for p in pkg.get("provides", set()):
-                        provides_list.append((pkg_id, p))
-                    for r in pkg.get("requires", set()):
-                        requires_list.append((pkg_id, r, 0))
-                    for r in pkg.get("weak_requires", set()):
-                        requires_list.append((pkg_id, r, 1))
-
-                if provides_list:
-                    self.conn.executemany(
-                        "INSERT OR IGNORE INTO provides(package_id, provide_name) VALUES (?, ?)",
-                        provides_list,
-                    )
-                if requires_list:
-                    self.conn.executemany(
-                        "INSERT OR IGNORE INTO requires(package_id, require_name, is_weak) VALUES (?, ?, ?)",
-                        requires_list,
-                    )
-
-            _logger.info(f"Bulk insert completed for repo_id={repo_id}")
-        except Exception as e:
-            _logger.exception(f"Failed bulk insert for repo_id={repo_id}: {e}")
-            raise
+    def _parse_pkg_version(self, pkg_version: str) -> Tuple[str, Optional[str]]:
+        """Split package:version string into name and version."""
+        if ":" in pkg_version:
+            name, version = pkg_version.split(":", 1)
+            return name, version
+        return pkg_version, None
