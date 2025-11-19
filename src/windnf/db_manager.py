@@ -16,13 +16,12 @@ class DbManager:
         self._init_schema()
 
     def _configure_pragmas(self) -> None:
-        pragmas = [
+        for pragma in [
             "PRAGMA synchronous = OFF;",
             "PRAGMA journal_mode = MEMORY;",
             "PRAGMA cache_size = 100000;",
             "PRAGMA locking_mode = EXCLUSIVE;",
-        ]
-        for pragma in pragmas:
+        ]:
             self.conn.execute(pragma)
 
     def _init_schema(self) -> None:
@@ -90,8 +89,9 @@ class DbManager:
         with self.conn:
             self.conn.executescript(schema_sql)
 
+    # -------------------------------
     # Repository Methods
-
+    # -------------------------------
     def add_repository(self, name: str, base_url: str, repomd_url: str) -> None:
         with self.conn:
             self.conn.execute(
@@ -141,8 +141,9 @@ class DbManager:
             self.conn.execute("DELETE FROM packages WHERE repo_id = ?", (repo_id,))
         _logger.info(f"All packages cleared for repo_id={repo_id}.")
 
+    # -------------------------------
     # Package Methods
-
+    # -------------------------------
     def add_packages_bulk(self, repo_id: int, packages: List[Dict]) -> List[int]:
         if not packages:
             return []
@@ -217,8 +218,9 @@ class DbManager:
                 [(package_id, r, int(is_weak)) for r in requires],
             )
 
+    # -------------------------------
     # Search and Info Methods
-
+    # -------------------------------
     def search_packages(
         self,
         patterns: Union[str, List[str]],
@@ -294,80 +296,64 @@ class DbManager:
             )
         return c.fetchone()
 
-    def get_providing_packages(
-        self,
-        provide_name: str,
-        repo_names: Optional[List[str]] = None,
+    # -------------------------------
+    # Unified Dependency Resolution
+    # -------------------------------
+    def resolve_dependencies(
+        self, packages: List[Union[str, sqlite3.Row]], include_weak: bool = False, recursive: bool = False
     ) -> List[sqlite3.Row]:
-        c = self.conn.cursor()
-        query = """
-            SELECT p.*, r.name as repo_name FROM packages p
-            JOIN provides pr ON pr.package_id = p.id
-            JOIN repositories r ON p.repo_id = r.id
-            WHERE pr.provide_name = ?
         """
-        params = [provide_name]
-        if repo_names:
-            placeholders = ",".join("?" for _ in repo_names)
-            query += f" AND r.name IN ({placeholders})"
-            params.extend(repo_names)
-        query += " ORDER BY p.name"
-        c.execute(query, params)
-        return c.fetchall()
-
-    # Dependency resolution
-
-    def get_direct_dependencies(self, package_id: int, include_weak: bool = False) -> Set[int]:
-        c = self.conn.cursor()
-        query = """
-            SELECT DISTINCT pkg.id
-            FROM requires AS req
-            LEFT JOIN provides AS prov ON req.require_name = prov.provide_name
-            LEFT JOIN packages AS pkg ON (prov.package_id = pkg.id OR req.require_name = pkg.name)
-            WHERE req.package_id = ?
+        Returns a list of package rows including all dependencies.
+        `packages` can be a list of package names or sqlite3.Row objects.
         """
-        params = [package_id]
-        if not include_weak:
-            query += " AND req.is_weak = 0"
-        c.execute(query, params)
-        results = c.fetchall()
-        return {row["id"] for row in results if row["id"] is not None}
+        all_packages = {p["id"]: p for p in self.conn.execute("SELECT * FROM packages").fetchall()}
 
-    def get_dependencies_for_package(
-        self,
-        package_id: int,
-        include_weak: bool = False,
-        recurse: bool = False,
-    ) -> Set[int]:
-        dependencies = set()
-        to_process = {package_id}
+        provides_map: Dict[str, Set[int]] = {}
+        for row in self.conn.execute("SELECT package_id, provide_name FROM provides"):
+            provides_map.setdefault(row["provide_name"], set()).add(row["package_id"])
+
+        requires_map: Dict[int, List[Tuple[str, bool]]] = {}
+        for row in self.conn.execute("SELECT package_id, require_name, is_weak FROM requires"):
+            requires_map.setdefault(row["package_id"], []).append((row["require_name"], bool(row["is_weak"])))
+
+        resolved_ids: Set[int] = set()
+        to_process: List[int] = []
+
+        for pkg in packages:
+            if isinstance(pkg, sqlite3.Row):
+                to_process.append(pkg["id"])
+            else:
+                row = self.conn.execute(
+                    "SELECT id FROM packages WHERE name = ? ORDER BY epoch DESC, version DESC, release DESC LIMIT 1",
+                    (pkg,),
+                ).fetchone()
+                if row:
+                    to_process.append(row["id"])
 
         while to_process:
             current_id = to_process.pop()
-            c = self.conn.cursor()
-            query = """
-                SELECT p.id FROM requires req
-                JOIN packages p ON req.require_name = p.name
-                WHERE req.package_id = ?
-            """
-            params = [current_id]
-            if not include_weak:
-                query += " AND req.is_weak = 0"
+            if current_id in resolved_ids:
+                continue
+            resolved_ids.add(current_id)
 
-            c.execute(query, params)
-            required_ids = {row["id"] for row in c.fetchall()}
+            if recursive:
+                for req_name, is_weak in requires_map.get(current_id, []):
+                    if not include_weak and is_weak:
+                        continue
+                    candidate_ids = provides_map.get(req_name, set())
+                    pkg_row = next((p for p in all_packages.values() if p["name"] == req_name), None)
+                    if pkg_row:
+                        candidate_ids.add(pkg_row["id"])
+                    for cid in candidate_ids:
+                        if cid not in resolved_ids:
+                            to_process.append(cid)
 
-            new_ids = required_ids - dependencies
-            dependencies.update(new_ids)
-            if recurse:
-                to_process.update(new_ids)
+        return [all_packages[pid] for pid in resolved_ids if pid in all_packages]
 
-        return dependencies
-
+    # -------------------------------
     # Utilities
-
+    # -------------------------------
     def _parse_pkg_version(self, pkg_version: str) -> Tuple[str, Optional[str]]:
-        """Split package:version string into name and version."""
         if ":" in pkg_version:
             name, version = pkg_version.split(":", 1)
             return name, version
