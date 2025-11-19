@@ -65,7 +65,6 @@ def main():
     # ===============================================================
     p_search = subparsers.add_parser("search", help="Search packages")
     p_search.add_argument("patterns", nargs="+", help="Package search patterns (wildcards supported)")
-    p_search.add_argument("--all", action="store_true", help="Search Description + URL and use OR matching")
     p_search.add_argument("--showduplicates", action="store_true", help="Show all package versions")
     p_search.add_argument(
         "--repo",
@@ -166,12 +165,7 @@ def main():
         return args.func(args.name, args.force, args.all)
 
     elif args.command == "search":
-        return args.func(
-            patterns=args.patterns,
-            repoids=args.repoids,
-            search_all=args.all,
-            showduplicates=args.showduplicates,
-        )
+        return args.func(patterns=args.patterns, repoids=args.repoids, showduplicates=args.showduplicates)
 
     elif args.command == "resolve":
         return args.func(
