@@ -20,7 +20,6 @@ def parse_repoid(value):
 
 def main():
     parser = argparse.ArgumentParser(description="windnf CLI tool (DNF-style commands)")
-
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # ===============================================================

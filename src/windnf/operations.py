@@ -1,7 +1,7 @@
 # operations.py
 import fnmatch
 import sys
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from .config import Config
 from .db_manager import DbManager
@@ -21,14 +21,16 @@ metadata_mgr = MetadataManager(downloader, db)
 # Helper: pattern matching
 # -------------------------------
 def match_patterns(name: str, patterns: List[str]) -> bool:
-    for pat in patterns:
-        if "*" not in pat and "?" not in pat:
-            if pat in name:
-                return True
-        else:
-            if fnmatch.fnmatch(name, pat):
-                return True
-    return False
+    """Check if the name matches any of the given patterns."""
+    return any(fnmatch.fnmatch(name, pat) for pat in patterns)
+
+
+def confirm(prompt: str) -> bool:
+    """Prompt the user for confirmation."""
+    try:
+        return input(f"{prompt} [y/N]: ").strip().lower() == "y"
+    except EOFError:
+        return False
 
 
 # -------------------------------
@@ -48,75 +50,61 @@ def repolist():
         print(f"{r['name']:20} {r['base_url']} (repomd: {r['repomd_url']})")
 
 
-def reposync(names: Optional[List[str]] = None, all_: bool = False):
+def _get_target_repos(names: Optional[List[str]] = None, all_: bool = False) -> List[dict]:
     if all_:
-        repos = db.get_repositories()
-    else:
-        repos = [db.get_repo_by_name(n) for n in (names or []) if db.get_repo_by_name(n)]
+        return db.get_repositories()
+    if not names:
+        return []
+    return [db.get_repo_by_name(n) for n in names if db.get_repo_by_name(n)]
+
+
+def reposync(names: Optional[List[str]] = None, all_: bool = False):
+    repos = _get_target_repos(names, all_)
     for repo in repos:
         _logger.info(f"Syncing repository '{repo['name']}' …")
         metadata_mgr.sync_repo(repo)
 
 
-def repodel(names=None, force: bool = False, all_: bool = False):
-    """
-    Delete one or more repositories and their packages.
-    - names: list of repository names to delete
-    - force: skip confirmation
-    - all_: delete all repositories
-    """
+def repodel(names: Optional[List[str]] = None, force: bool = False, all_: bool = False):
+    repos = _get_target_repos(names, all_)
+    if not repos:
+        _logger.info("No repositories to delete.")
+        return
+
+    target_names = []
     if all_:
-        repos = db.get_repositories()
-        if not repos:
-            _logger.info("No repositories to delete.")
-            return
-        target_names = [r["name"] for r in repos]
         if not force and not confirm("Delete ALL repositories and their packages?"):
             _logger.info("Operation canceled.")
             return
+        target_names = [r["name"] for r in repos]
     else:
-        if not names:
-            print("Error: specify one or more repository names or use --all")
-            sys.exit(1)
-        target_names = []
-        for name in names:
-            repo = db.get_repo_by_name(name)
-            if not repo:
-                print(f"Repository '{name}' not found.")
-                continue
-            if force or confirm(f"Delete repository '{name}' and its packages?"):
-                target_names.append(name)
+        for repo in repos:
+            if force or confirm(f"Delete repository '{repo['name']}' and its packages?"):
+                target_names.append(repo["name"])
 
-    # Delete each repository
     for name in target_names:
         db.delete_repository(name)
-
-
-def confirm(prompt: str) -> bool:
-    try:
-        return input(f"{prompt} [y/N]: ").strip().lower() == "y"
-    except EOFError:
-        return False
 
 
 # -------------------------------
 # Search packages
 # -------------------------------
-def search(patterns: list, repoids: Optional[list] = None, showduplicates: bool = False):
+def search(patterns: List[str], repoids: Optional[List[str]] = None, showduplicates: bool = False):
     if not patterns:
         print("No search patterns provided.")
         return
-    matched_pkgs = db.search_packages(patterns, repo_names=repoids)
+
+    matched_pkgs = [dict(p) for p in db.search_packages(patterns, repo_names=repoids) or []]
     if not matched_pkgs:
         print("No packages matched your search.")
         return
-    matched_pkgs = [dict(p) for p in matched_pkgs]
 
     if not showduplicates:
         newest = {}
         for pkg in matched_pkgs:
             key = (pkg["name"], pkg["arch"])
-            if key not in newest or (pkg.get("epoch", 0), pkg.get("version", ""), pkg.get("release", "")) > (
+            current_version = (pkg.get("epoch", 0), pkg.get("version", ""), pkg.get("release", ""))
+            if key not in newest or current_version > (
                 newest[key].get("epoch", 0),
                 newest[key].get("version", ""),
                 newest[key].get("release", ""),
@@ -124,9 +112,8 @@ def search(patterns: list, repoids: Optional[list] = None, showduplicates: bool 
                 newest[key] = pkg
         matched_pkgs = list(newest.values())
 
-    matched_pkgs.sort(
-        key=lambda p: (p.get("name", "").lower(), -p.get("epoch", 0), p.get("version", ""), p.get("release", ""))
-    )
+    matched_pkgs.sort(key=lambda p: (p["name"].lower(), -p.get("epoch", 0), p.get("version", ""), p.get("release", "")))
+
     for pkg in matched_pkgs:
         print(f"{pkg['name']:<40} {pkg['version']}-{pkg['release']:<20} {pkg['arch']:<10} {pkg['repo_name']}")
         if pkg.get("summary"):
@@ -143,16 +130,11 @@ def resolve(
     weakdeps: bool = False,
     arch: Optional[str] = None,
 ):
-    repo_names = repoids if repoids else None
-
-    initial = db.search_packages(packages, repo_names=repo_names)
+    initial = db.search_packages(packages, repo_names=repoids)
     if not initial:
         print("No matching packages.")
         return
 
-    # -----------------------------
-    # Recursive resolution logic
-    # -----------------------------
     all_packages = db.get_all_packages()
     provides_map = db.get_provides_map()
     requires_map = db.get_requires_map()
@@ -171,18 +153,16 @@ def resolve(
                 if not weakdeps and is_weak:
                     continue
                 candidate_ids = provides_map.get(req_name, set())
-                # fallback: match package name directly if not provided
-                pkg_row = next((p for p in all_packages.values() if p["name"] == req_name), None)
-                if pkg_row:
-                    candidate_ids.add(pkg_row["id"])
-                for cid in candidate_ids:
-                    if cid not in resolved_ids:
-                        to_process.append(cid)
+                if not candidate_ids:
+                    pkg_row = next((p for p in all_packages.values() if p["name"] == req_name), None)
+                    if pkg_row:
+                        candidate_ids.add(pkg_row["id"])
+                to_process.extend(cid for cid in candidate_ids if cid not in resolved_ids)
 
     resolved_pkgs = [all_packages[pid] for pid in resolved_ids if pid in all_packages]
-
     if arch:
         resolved_pkgs = [p for p in resolved_pkgs if p["arch"] == arch]
+
     if not resolved_pkgs:
         print("No matching packages.")
         return
@@ -211,24 +191,16 @@ def download(
     downloaddir = downloaddir or "."
     _logger.info(f"Download directory: {downloaddir}")
 
-    all_pkgs = db.search_packages(patterns=["*"], repo_names=repoids)
-    if not all_pkgs:
-        print("No packages found in repository selection.")
-        return
-
-    matched: List[sqlite3.Row] = [p for p in all_pkgs if match_patterns(p["name"], packages)]
+    all_pkgs = [dict(p) for p in db.search_packages(["*"], repo_names=repoids) or []]
+    matched = [p for p in all_pkgs if match_patterns(p["name"], packages)]
     if not matched:
         print("No packages matched download request.")
         return
 
-    matched = [dict(p) for p in matched]
-
     if resolve_deps:
         deps = db.resolve_dependencies(matched, include_weak=False, recursive=True)
         known_ids = {p["id"] for p in matched}
-        for d in deps:
-            if d["id"] not in known_ids:
-                matched.append(dict(d))
+        matched.extend(d for d in deps if d["id"] not in known_ids)
 
     if source:
         try:
