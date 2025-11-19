@@ -64,14 +64,6 @@ class DbManager:
             FOREIGN KEY(repo_id) REFERENCES repositories(id) ON DELETE CASCADE
         );
 
-        CREATE TABLE IF NOT EXISTS files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            package_id INTEGER NOT NULL,
-            filepath TEXT NOT NULL,
-            UNIQUE(package_id, filepath),
-            FOREIGN KEY(package_id) REFERENCES packages(id) ON DELETE CASCADE
-        );
-
         CREATE TABLE IF NOT EXISTS provides (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             package_id INTEGER NOT NULL,
@@ -135,7 +127,6 @@ class DbManager:
     def clear_repo_packages(self, repo_id: int) -> None:
         """Safely delete all packages and related data for a repo."""
         sql_statements = [
-            "DELETE FROM files WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
             "DELETE FROM provides WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
             "DELETE FROM requires WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
             "DELETE FROM packages WHERE repo_id = ?",
@@ -194,15 +185,6 @@ class DbManager:
 
         rows = self.conn.execute("SELECT id FROM packages WHERE repo_id = ?", (repo_id,)).fetchall()
         return [row["id"] for row in rows]
-
-    def add_files(self, package_id: int, files: List[str]) -> None:
-        if not files:
-            return
-        with self.conn:
-            self.conn.executemany(
-                "INSERT OR IGNORE INTO files(package_id, filepath) VALUES (?, ?)",
-                [(package_id, f) for f in files],
-            )
 
     def add_provides(self, package_id: int, provides: Set[str]) -> None:
         if not provides:
