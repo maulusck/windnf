@@ -65,6 +65,9 @@ def main():
     # ====================================================
     # REPOSYNC
     # ====================================================
+    # run("reposync", REPO1_NAME)
+    # run("reposync", REPO1_NAME, REPO2_NAME)
+    run("reposync", "notarepo")
     run("reposync", "--all")
 
     # ====================================================
@@ -76,12 +79,15 @@ def main():
     run("search", "*bash*")
     run("search", "bash", "--showduplicates")
     run("search", "bash", "--repo", REPO1_NAME)
+    run("search", "bash", "--repo", REPO2_NAME)
+    run("search", "bash", "--repo", "notarepo")
 
     print("Running zabbix-agent2 search tests...")
     run("search", "zabbix-agent2", "--repo", REPO1_NAME)
     run("search", "zabbix-agent2", "--repo", REPO2_NAME)
     run("search", "zabbix-agent2", "--repo", REPO1_NAME, "--repo", REPO2_NAME)
     run("search", "zabbix-agent2", "--repo", f"{REPO1_NAME},{REPO2_NAME}")
+    run("search", "zabbix-agent2", "--repo", "notarepo")
     run("search", "zabbix-agent2")  # default all repos
 
     # ====================================================
@@ -91,7 +97,9 @@ def main():
     run("resolve", "vlc", "--recursive")
     run("resolve", "vlc", "--weakdeps")
     run("resolve", "vlc", "--arch", "x86_64")
+    run("resolve", "vlc", "--arch", "arm64")
     run("resolve", "vlc", "--repo", REPO1_NAME)
+    run("resolve", "vlc", "--repo", "notarepo")
 
     # ====================================================
     # DOWNLOAD
