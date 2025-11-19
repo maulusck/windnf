@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e
+cd "$(dirname ${0})/../"
 
 #WINDNF="python -m windnf.cli"
 WINDNF="windnf"
