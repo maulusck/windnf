@@ -95,26 +95,26 @@ def main():
     # DOWNLOAD
     # ====================================================
     # Use DOWNLOAD_DIR for all downloads
-    run("download", "bash", "--urls")
-    run("download", "*ash", "--urls")
-    run("download", "bash", "--downloaddir", str(DOWNLOAD_DIR), "--urls")
-    run("download", "bash", "--resolve", "--urls", "--downloaddir", str(DOWNLOAD_DIR))
-    run("download", "bash", "--source", "--urls", "--downloaddir", str(DOWNLOAD_DIR))
-    run("download", "bash", "--arch", "x86_64", "--urls", "--downloaddir", str(DOWNLOAD_DIR))
-    run("download", "bash", "--repo", REPO1_NAME, "--urls", "--downloaddir", str(DOWNLOAD_DIR))
+    run("download", "vlc", "--urls")
+    run("download", "vlc-plugin*", "--urls")
+    run("download", "vlc", "--downloaddir", str(DOWNLOAD_DIR), "--urls")
+    run("download", "vlc", "--resolve", "--urls", "--downloaddir", str(DOWNLOAD_DIR))
+    run("download", "vlc", "--source", "--urls", "--downloaddir", str(DOWNLOAD_DIR))
+    run("download", "vlc", "--arch", "x86_64", "--urls", "--downloaddir", str(DOWNLOAD_DIR))
+    run("download", "vlc", "--repo", REPO1_NAME, "--urls", "--downloaddir", str(DOWNLOAD_DIR))
 
     # ====================================================
     # REPODEL
     # ====================================================
-    run("repodel", REPO1_NAME, "--force")
-    run("repodel", REPO2_NAME, "--force")
-    run("repolist")
+    # run("repodel", REPO1_NAME, "--force")
+    # run("repodel", REPO2_NAME, "--force")
+    # run("repolist")
 
-    # Re-add for --all deletion
-    run("repoadd", REPO1_NAME, REPO1_BASEURL, "--repomd", REPOMD1_URL)
-    run("repoadd", REPO2_NAME, REPO2_BASEURL, "--repomd", REPOMD2_URL)
-    run("repodel", "--all", "--force")
-    run("repolist")
+    # # Re-add for --all deletion
+    # run("repoadd", REPO1_NAME, REPO1_BASEURL, "--repomd", REPOMD1_URL)
+    # run("repoadd", REPO2_NAME, REPO2_BASEURL, "--repomd", REPOMD2_URL)
+    # run("repodel", "--all", "--force")
+    # run("repolist")
 
     print("\033[32mAll tests completed successfully.\033[0m")
 

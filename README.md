@@ -1,10 +1,11 @@
 # windnf Project
 
-> windnf — The Windows DNF Simulator, continuing the RPM tradition with quirky naming, seamless package management, and native performance.
+> windnf — The Windows DNF Simulator, continuing the RPM tradition with quirky naming, seamless [nevra](https://deepwiki.com/rpm-software-management/hawkey/4.2-nevra-parsing-and-string-utilities)tic package management, and native performance.
 
 ### TODO
 - [ ] optimize and cleanup code
-- [ ] unify db manager return types
+- [X] unify db manager return types
+- [ ] think about SRPM management
 - [ ] add `windnf info` command
 - [ ] weakdeps are not parsed from XML thus not working (not in db)
 - [ ] arch other then x86_64 is still untested
