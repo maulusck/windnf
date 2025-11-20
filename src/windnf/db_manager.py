@@ -32,6 +32,7 @@ class DbManager:
     # Initialization
     # -------------------------------
     def _configure_pragmas(self) -> None:
+        # Enable foreign keys + faster in-memory journaling for performance
         for pragma in [
             "PRAGMA synchronous = OFF;",
             "PRAGMA journal_mode = MEMORY;",
@@ -127,8 +128,7 @@ class DbManager:
         return self._to_dict(rows)
 
     def get_repo_map(self) -> Dict[str, Dict]:
-        repos = self.get_repositories()
-        return {r["name"]: r for r in repos}
+        return {r["name"]: r for r in self.get_repositories()}
 
     def get_repo_by_name(self, name: str) -> Optional[Dict]:
         row = self.conn.execute("SELECT * FROM repositories WHERE name = ?", (name,)).fetchone()
@@ -141,22 +141,15 @@ class DbManager:
             return
 
         _logger.info(f"Deleting repository '{repo_name}' and all related data...")
-
+        # Foreign keys handle cascade deletion automatically
         with self.conn:
-            # Cascade deletes will automatically remove packages, provides, and requires
             self.conn.execute("DELETE FROM repositories WHERE id = ?", (repo["id"],))
+        _logger.info(f"Repository '{repo_name}' deleted.")
 
-        _logger.info(f"Repository '{repo_name}' deleted (including all packages and dependencies).")
-
+    # Explicit clearing of packages is now optional because of cascade
     def clear_repo_packages(self, repo_id: int) -> None:
-        sqls = [
-            "DELETE FROM provides WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
-            "DELETE FROM requires WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
-            "DELETE FROM packages WHERE repo_id = ?",
-        ]
         with self.conn:
-            for sql in sqls:
-                self.conn.execute(sql, (repo_id,))
+            self.conn.execute("DELETE FROM packages WHERE repo_id = ?", (repo_id,))
         _logger.info(f"All packages cleared for repo_id={repo_id}.")
 
     # -------------------------------
@@ -207,8 +200,8 @@ class DbManager:
                 pkg_rows,
             )
 
-        ids = [r["id"] for r in self.conn.execute("SELECT id FROM packages WHERE repo_id = ?", (repo_id,)).fetchall()]
-        return ids
+        # Directly fetch only inserted IDs if needed
+        return [r["id"] for r in self.conn.execute("SELECT id FROM packages WHERE repo_id = ?", (repo_id,)).fetchall()]
 
     def add_provides(self, package_id: int, provides: Set[str]) -> None:
         if not provides:
@@ -216,7 +209,7 @@ class DbManager:
         with self.conn:
             self.conn.executemany(
                 "INSERT OR IGNORE INTO provides(package_id, provide_name) VALUES (?, ?)",
-                [(package_id, p) for p in provides],
+                ((package_id, p) for p in provides),
             )
 
     def add_requires(self, package_id: int, requires: Set[str], is_weak: bool = False) -> None:
@@ -225,7 +218,7 @@ class DbManager:
         with self.conn:
             self.conn.executemany(
                 "INSERT OR IGNORE INTO requires(package_id, require_name, is_weak) VALUES (?, ?, ?)",
-                [(package_id, r, int(is_weak)) for r in requires],
+                ((package_id, r, int(is_weak)) for r in requires),
             )
 
     # -------------------------------
@@ -236,8 +229,7 @@ class DbManager:
             return {}
         placeholders = ",".join("?" for _ in ids)
         rows = self.conn.execute(f"SELECT * FROM packages WHERE id IN ({placeholders})", ids).fetchall()
-        dicts = self._to_dict(rows)
-        return {r["id"]: r for r in dicts}
+        return {r["id"]: dict(r) for r in rows}
 
     def get_source_packages_for(self, pkg_ids: List[int]) -> List[Dict]:
         if not pkg_ids:
@@ -248,9 +240,7 @@ class DbManager:
             SELECT p.*, r.name AS repo_name
             FROM packages p
             JOIN repositories r ON p.repo_id = r.id
-            WHERE p.sourcerpm IN (
-                SELECT name FROM packages WHERE id IN ({placeholders})
-            )
+            WHERE p.sourcerpm IN (SELECT name FROM packages WHERE id IN ({placeholders}))
             """,
             pkg_ids,
         ).fetchall()
@@ -259,7 +249,6 @@ class DbManager:
     def get_package_urls(self, pkg_ids: List[int]) -> Dict[int, str]:
         if not pkg_ids:
             return {}
-
         repo_map = {r["id"]: r for r in self.get_repositories()}
         placeholders = ",".join("?" for _ in pkg_ids)
 
@@ -268,14 +257,11 @@ class DbManager:
             pkg_ids,
         ).fetchall()
 
-        result = {}
-        for r in rows:
-            if r["url"]:
-                result[r["id"]] = r["url"]
-            else:
-                repo = repo_map[r["repo_id"]]
-                result[r["id"]] = urljoin(repo["base_url"].rstrip("/") + "/", r["filepath"].lstrip("/"))
-        return result
+        return {
+            r["id"]: r["url"]
+            or urljoin(repo_map[r["repo_id"]]["base_url"].rstrip("/") + "/", r["filepath"].lstrip("/"))
+            for r in rows
+        }
 
     # -------------------------------
     # Search
@@ -294,7 +280,6 @@ class DbManager:
 
         for pat in patterns:
             name, version = self._parse_pkg_version(pat)
-
             if version and exact_version:
                 conditions.append("(p.name = ? AND p.version = ?)")
                 params.extend([name, version])
@@ -309,7 +294,6 @@ class DbManager:
             return []
 
         where_clause = " OR ".join(conditions)
-
         repo_filter = ""
         if repo_names:
             placeholders = ",".join("?" for _ in repo_names)
@@ -323,17 +307,9 @@ class DbManager:
         WHERE ({where_clause}) {repo_filter}
         ORDER BY p.epoch DESC, p.version DESC, p.release DESC, p.name ASC
         """
+        return self._to_dict(self.conn.execute(sql, params).fetchall())
 
-        rows = self.conn.execute(sql, params).fetchall()
-        return self._to_dict(rows)
-
-    def get_package_info(
-        self,
-        repo_name: str,
-        package_name: str,
-        version: Optional[str] = None,
-    ) -> Optional[Dict]:
-
+    def get_package_info(self, repo_name: str, package_name: str, version: Optional[str] = None) -> Optional[Dict]:
         if version:
             sql = """
             SELECT p.*, r.name AS repo_name
@@ -341,7 +317,7 @@ class DbManager:
             JOIN repositories r ON p.repo_id = r.id
             WHERE r.name = ? AND p.name = ? AND p.version = ?
             """
-            row = self.conn.execute(sql, (repo_name, package_name, version)).fetchone()
+            params = (repo_name, package_name, version)
         else:
             sql = """
             SELECT p.*, r.name AS repo_name
@@ -351,8 +327,8 @@ class DbManager:
             ORDER BY p.epoch DESC, p.version DESC, p.release DESC
             LIMIT 1
             """
-            row = self.conn.execute(sql, (repo_name, package_name)).fetchone()
-
+            params = (repo_name, package_name)
+        row = self.conn.execute(sql, params).fetchone()
         return self._to_dict(row)
 
     # -------------------------------
@@ -360,8 +336,7 @@ class DbManager:
     # -------------------------------
     def get_all_packages(self) -> Dict[int, Dict]:
         rows = self.conn.execute("SELECT * FROM packages").fetchall()
-        dicts = self._to_dict(rows)
-        return {p["id"]: p for p in dicts}
+        return {r["id"]: dict(r) for r in rows}
 
     def get_provides_map(self) -> Dict[str, Set[int]]:
         provides: Dict[str, Set[int]] = {}
