@@ -99,7 +99,7 @@ class MetadataManager:
             return
 
         self.db.clear_repo_packages(repo_id)
-        self._parse_and_store_packages_bulk(repo_id, primary_xml_str, primary_ns, rpm_ns)
+        self._parse_and_store_packages(repo_id, primary_xml_str, primary_ns, rpm_ns)
 
         self.db.update_repo_timestamp(repo_id, datetime.utcnow().isoformat())
         _logger.info(f"Repository '{name}' sync completed.")
@@ -144,7 +144,7 @@ class MetadataManager:
         _logger.error("Unsupported compression format for primary XML")
         return None
 
-    def _parse_and_store_packages_bulk(self, repo_id: int, xml_content: str, primary_ns: str, rpm_ns: str) -> None:
+    def _parse_and_store_packages(self, repo_id: int, xml_content: str, primary_ns: str, rpm_ns: str) -> None:
         root = ET.fromstring(xml_content)
 
         def qn(tag):

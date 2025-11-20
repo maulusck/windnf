@@ -2,6 +2,7 @@
 import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
+from urllib.parse import urljoin
 
 from .logger import setup_logger
 
@@ -111,6 +112,10 @@ class DbManager:
     def get_repositories(self) -> List[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM repositories ORDER BY name").fetchall()
 
+    def get_repo_map(self) -> Dict[str, sqlite3.Row]:
+        """Return all repositories as a dict for fast lookup."""
+        return {r["name"]: r for r in self.get_repositories()}
+
     def get_repo_by_name(self, name: str) -> Optional[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM repositories WHERE name = ?", (name,)).fetchone()
 
@@ -119,13 +124,12 @@ class DbManager:
         if not repo:
             _logger.warning(f"Repository '{repo_name}' not found.")
             return
-
-        repo_id = repo["id"]
-        self.clear_repo_packages(repo_id)
-        _logger.info(f"Repository '{repo_name}' fully removed (including packages).")
+        self.clear_repo_packages(repo["id"])
+        with self.conn:
+            self.conn.execute("DELETE FROM repositories WHERE id = ?", (repo["id"],))
+        _logger.info(f"Repository '{repo_name}' deleted (including packages).")
 
     def clear_repo_packages(self, repo_id: int) -> None:
-        """Safely delete all packages and related data for a repo."""
         sql_statements = [
             "DELETE FROM provides WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
             "DELETE FROM requires WHERE package_id IN (SELECT id FROM packages WHERE repo_id = ?)",
@@ -203,6 +207,46 @@ class DbManager:
                 "INSERT OR IGNORE INTO requires(package_id, require_name, is_weak) VALUES (?, ?, ?)",
                 [(package_id, r, int(is_weak)) for r in requires],
             )
+
+    # -------------------------------
+    # Bulk Fetch Methods for Optimization
+    # -------------------------------
+    def get_packages_by_ids(self, ids: List[int]) -> Dict[int, sqlite3.Row]:
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        sql = f"SELECT * FROM packages WHERE id IN ({placeholders})"
+        rows = self.conn.execute(sql, ids).fetchall()
+        return {r["id"]: r for r in rows}
+
+    def get_source_packages_for(self, pkg_ids: List[int]) -> List[sqlite3.Row]:
+        if not pkg_ids:
+            return []
+        placeholders = ",".join("?" for _ in pkg_ids)
+        sql = f"""
+            SELECT p.*, r.name as repo_name
+            FROM packages p
+            JOIN repositories r ON p.repo_id = r.id
+            WHERE p.sourcerpm IN (SELECT name FROM packages WHERE id IN ({placeholders}))
+        """
+        return self.conn.execute(sql, pkg_ids).fetchall()
+
+    def get_package_urls(self, pkg_ids: List[int]) -> Dict[int, str]:
+        repo_map = self.get_repo_map()
+        result: Dict[int, str] = {}
+        if not pkg_ids:
+            return result
+
+        placeholders = ",".join("?" for _ in pkg_ids)
+        sql = f"SELECT id, repo_id, filepath, url FROM packages WHERE id IN ({placeholders})"
+        for row in self.conn.execute(sql, pkg_ids).fetchall():
+            if row["url"]:
+                result[row["id"]] = row["url"]
+            else:
+                repo = next((r for r in repo_map.values() if r["id"] == row["repo_id"]), None)
+                if repo:
+                    result[row["id"]] = urljoin(repo["base_url"].rstrip("/") + "/", row["filepath"].lstrip("/"))
+        return result
 
     # -------------------------------
     # Search Methods

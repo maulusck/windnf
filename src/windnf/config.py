@@ -1,3 +1,4 @@
+# config.py
 import configparser
 from pathlib import Path
 
@@ -12,20 +13,22 @@ class Config:
         self.config_dir.mkdir(exist_ok=True)
         self.config_path = self.config_dir / "windnf.conf"
 
-        self.downloader = "powershell"
-        self.skip_ssl_verify = True
-        self.db_path = self.config_dir / "windnf.sqlite"
-        self.download_path = self.config_dir / "downloads"
+        # Default values
+        self.downloader: str = "powershell"
+        self.skip_ssl_verify: bool = True
+        self.db_path: Path = self.config_dir / "windnf.sqlite"
+        self.download_path: Path = Path(".")
 
         self.load()
 
     def load(self) -> None:
         parser = configparser.ConfigParser()
         if not self.config_path.exists():
-            _logger.warning(f"Config file {self.config_path} not found. Creating default config there.")
+            _logger.warning(f"Config file {self.config_path} not found. Creating default config.")
             self._write_default_config()
 
         parser.read(self.config_path)
+
         self.downloader = parser.get("general", "downloader", fallback=self.downloader)
         self.skip_ssl_verify = parser.getboolean("general", "skip_ssl_verify", fallback=self.skip_ssl_verify)
         self.db_path = Path(parser.get("general", "db_path", fallback=str(self.db_path)))
@@ -42,8 +45,8 @@ class Config:
             "db_path": str(self.db_path),
             "download_path": str(self.download_path),
         }
-        with open(self.config_path, "w") as configfile:
-            parser.write(configfile)
+        with self.config_path.open("w") as f:
+            parser.write(f)
         _logger.info(f"Default config file written to {self.config_path}")
 
     def save(self) -> None:
@@ -54,6 +57,6 @@ class Config:
             "db_path": str(self.db_path),
             "download_path": str(self.download_path),
         }
-        with open(self.config_path, "w") as configfile:
-            parser.write(configfile)
+        with self.config_path.open("w") as f:
+            parser.write(f)
         _logger.info(f"Config saved to {self.config_path}")

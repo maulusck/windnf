@@ -10,16 +10,11 @@ from . import operations
 def parse_repoid(value):
     if not value:
         return None
-    repos = []
-    for part in value.split(","):
-        part = part.strip()
-        if part:
-            repos.append(part)
-    return repos
+    return [part.strip() for part in value.split(",") if part.strip()]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="windnf CLI tool (DNF-style commands)")
+    parser = argparse.ArgumentParser(description="windnf (DNF emulator for Windows)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # ===============================================================
@@ -111,8 +106,11 @@ def main():
     )
     p_download.add_argument("--downloaddir", "-x", help="Directory to save downloaded packages (default: CWD)")
     p_download.add_argument("--destdir", help="Alias for --downloaddir")
-    p_download.add_argument("--resolve", action="store_true", help="Download all dependencies too")
-    p_download.add_argument("--source", action="store_true", help="Download SRPMs instead of binary RPMs")
+    p_download.add_argument("--resolve", action="store_true", help="Download dependencies too")
+    p_download.add_argument(
+        "--recurse", "-R", action="store_true", help="Recursively download dependencies (implies --resolve)"
+    )
+    p_download.add_argument("--source", "-S", action="store_true", help="Download SRPMs instead of binary RPMs")
     p_download.add_argument(
         "--urls", "--urlsonly", dest="urls", action="store_true", help="Print URLs only (do not download)"
     )
@@ -124,24 +122,17 @@ def main():
     # ===============================================================
     args = parser.parse_args()
 
-    # Flatten repoids from nested lists into one list
-    if hasattr(args, "repoids") and args.repoids:
-        merged = []
-        for lst in args.repoids:
-            merged.extend(lst)
-        args.repoids = merged
-    else:
-        args.repoids = None
+    # Flatten repoids
+    if getattr(args, "repoids", None):
+        args.repoids = [repo for sublist in args.repoids for repo in sublist]
 
-    # Handle destdir alias
+    # destdir alias
     if getattr(args, "destdir", None):
         args.downloaddir = args.destdir
 
     # Validate reposync & repodel
-    if args.command == "reposync":
-        if args.all and args.names:
-            parser.error("reposync: cannot specify names together with --all.")
-
+    if args.command == "reposync" and args.all and args.names:
+        parser.error("reposync: cannot specify names together with --all.")
     if args.command == "repodel":
         if args.names and args.all:
             parser.error("repodel: cannot specify names together with --all.")
@@ -153,20 +144,14 @@ def main():
     # ===============================================================
     if args.command == "repoadd":
         return args.func(args.name, args.baseurl, args.repomd)
-
     elif args.command == "repolist":
         return args.func()
-
     elif args.command == "reposync":
-        repo_names = None if args.all else args.names
-        return args.func(repo_names, args.all)
-
+        return args.func(None if args.all else args.names, args.all)
     elif args.command == "repodel":
         return args.func(args.names, args.force, args.all)
-
     elif args.command == "search":
         return args.func(patterns=args.patterns, repoids=args.repoids, showduplicates=args.showduplicates)
-
     elif args.command == "resolve":
         return args.func(
             packages=args.packages,
@@ -175,18 +160,19 @@ def main():
             weakdeps=args.weakdeps,
             arch=args.arch,
         )
-
     elif args.command == "download":
+        if args.recurse:
+            args.resolve = True
         return args.func(
             packages=args.packages,
             repoids=args.repoids,
             downloaddir=args.downloaddir,
             resolve=args.resolve,
+            recurse=args.recurse,
             source=args.source,
             urls=args.urls,
             arch=args.arch,
         )
-
     else:
         parser.error("Internal error: unknown command.")
 

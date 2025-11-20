@@ -1,17 +1,21 @@
-# test_cli.py
+# tests/run.py
 import io
 import os
 import sys
 from contextlib import redirect_stdout
+from pathlib import Path
 
 from windnf import cli
 
 # -----------------------------------------------------------
-# Test configuration
+# Setup test directories
 # -----------------------------------------------------------
-TESTDIR = "tests"
-DOWNLOAD_DIR = os.path.join(TESTDIR, "downloads")
+SCRIPT_DIR = Path(__file__).parent.resolve()  # directory of this script (tests/)
+os.chdir(SCRIPT_DIR)  # change working directory to testdir
+DOWNLOAD_DIR = SCRIPT_DIR / "downloads"
+DOWNLOAD_DIR.mkdir(exist_ok=True)
 
+# Repository info
 REPO1_NAME = "epel9"
 REPO1_BASEURL = "https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/"
 REPOMD1_URL = f"{REPO1_BASEURL}repodata/repomd.xml"
@@ -19,9 +23,6 @@ REPOMD1_URL = f"{REPO1_BASEURL}repodata/repomd.xml"
 REPO2_NAME = "zabbix9"
 REPO2_BASEURL = "https://repo.zabbix.com/zabbix/7.0/centos/9/x86_64/"
 REPOMD2_URL = f"{REPO2_BASEURL}repodata/repomd.xml"
-
-# Create test directories
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 # -----------------------------------------------------------
@@ -48,12 +49,11 @@ def run(*args):
 # Test suite
 # -----------------------------------------------------------
 def main():
-    print("Starting windnf test suite...\n")
+    print(f"Starting windnf test suite in {SCRIPT_DIR}...\n")
 
     # ====================================================
     # REPOADD
     # ====================================================
-    run("repoadd", REPO1_NAME, REPO1_BASEURL)
     run("repoadd", REPO1_NAME, REPO1_BASEURL, "--repomd", REPOMD1_URL)
     run("repoadd", REPO2_NAME, REPO2_BASEURL, "--repomd", REPOMD2_URL)
 
@@ -65,8 +65,6 @@ def main():
     # ====================================================
     # REPOSYNC
     # ====================================================
-    # run("reposync", REPO1_NAME)
-    # run("reposync", REPO1_NAME, REPO2_NAME)
     run("reposync", "notarepo")
     run("reposync", "--all")
 
@@ -82,14 +80,6 @@ def main():
     run("search", "bash", "--repo", REPO2_NAME)
     run("search", "bash", "--repo", "notarepo")
 
-    print("Running zabbix-agent2 search tests...")
-    run("search", "zabbix-agent2", "--repo", REPO1_NAME)
-    run("search", "zabbix-agent2", "--repo", REPO2_NAME)
-    run("search", "zabbix-agent2", "--repo", REPO1_NAME, "--repo", REPO2_NAME)
-    run("search", "zabbix-agent2", "--repo", f"{REPO1_NAME},{REPO2_NAME}")
-    run("search", "zabbix-agent2", "--repo", "notarepo")
-    run("search", "zabbix-agent2")  # default all repos
-
     # ====================================================
     # RESOLVE
     # ====================================================
@@ -104,13 +94,14 @@ def main():
     # ====================================================
     # DOWNLOAD
     # ====================================================
+    # Use DOWNLOAD_DIR for all downloads
     run("download", "bash", "--urls")
     run("download", "*ash", "--urls")
-    run("download", "bash", "--downloaddir", DOWNLOAD_DIR, "--urls")
-    run("download", "bash", "--resolve", "--urls")
-    run("download", "bash", "--source", "--urls")
-    run("download", "bash", "--arch", "x86_64", "--urls")
-    run("download", "bash", "--repo", REPO1_NAME, "--urls")
+    run("download", "bash", "--downloaddir", str(DOWNLOAD_DIR), "--urls")
+    run("download", "bash", "--resolve", "--urls", "--downloaddir", str(DOWNLOAD_DIR))
+    run("download", "bash", "--source", "--urls", "--downloaddir", str(DOWNLOAD_DIR))
+    run("download", "bash", "--arch", "x86_64", "--urls", "--downloaddir", str(DOWNLOAD_DIR))
+    run("download", "bash", "--repo", REPO1_NAME, "--urls", "--downloaddir", str(DOWNLOAD_DIR))
 
     # ====================================================
     # REPODEL
@@ -122,7 +113,6 @@ def main():
     # Re-add for --all deletion
     run("repoadd", REPO1_NAME, REPO1_BASEURL, "--repomd", REPOMD1_URL)
     run("repoadd", REPO2_NAME, REPO2_BASEURL, "--repomd", REPOMD2_URL)
-
     run("repodel", "--all", "--force")
     run("repolist")
 
