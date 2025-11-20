@@ -249,16 +249,29 @@ def download(
         print("No downloadable packages after dependency resolution.")
         return
 
+    # BROKEN - need to think about source repo management
     # Step 3: convert to SRPMs if requested
     if source:
         srpms = []
+        all_repos = db.get_repositories()
+        all_repo_names = [r["name"] for r in all_repos]
+
         for pkg in matched:
             src_name = pkg.get("sourcerpm")
             if not src_name:
                 continue
-            spkg = db.get_package_info_by_repoid(pkg["repo_id"], src_name)
-            if spkg:
-                srpms.append(spkg)
+
+            # Search across all repos for the SRPM
+            found_srpm = None
+            for repo_name in all_repo_names:
+                candidates = db.search_packages([src_name], repo_names=[repo_name])
+                if candidates:
+                    found_srpm = candidates[0]  # pick the first match
+                    break
+
+            if found_srpm:
+                srpms.append(found_srpm)
+
         matched = srpms
         if not matched:
             print("No packages after SRPM conversion.")
