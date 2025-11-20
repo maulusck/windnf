@@ -37,6 +37,7 @@ class DbManager:
             "PRAGMA journal_mode = MEMORY;",
             "PRAGMA cache_size = 100000;",
             "PRAGMA locking_mode = EXCLUSIVE;",
+            "PRAGMA foreign_keys = ON;",
         ]:
             self.conn.execute(pragma)
 
@@ -139,10 +140,13 @@ class DbManager:
             _logger.warning(f"Repository '{repo_name}' not found.")
             return
 
-        self.clear_repo_packages(repo["id"])
+        _logger.info(f"Deleting repository '{repo_name}' and all related data...")
+
         with self.conn:
+            # Cascade deletes will automatically remove packages, provides, and requires
             self.conn.execute("DELETE FROM repositories WHERE id = ?", (repo["id"],))
-        _logger.info(f"Repository '{repo_name}' deleted (including packages).")
+
+        _logger.info(f"Repository '{repo_name}' deleted (including all packages and dependencies).")
 
     def clear_repo_packages(self, repo_id: int) -> None:
         sqls = [
