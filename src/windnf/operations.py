@@ -22,12 +22,10 @@ metadata_mgr = MetadataManager(downloader, db)
 # Helper: pattern matching
 # -------------------------------
 def match_patterns(name: str, patterns: List[str]) -> bool:
-    """Check if the name matches any of the given patterns."""
     return any(fnmatch.fnmatch(name, pat) for pat in patterns)
 
 
 def confirm(prompt: str) -> bool:
-    """Prompt the user for confirmation."""
     try:
         return input(f"{prompt} [y/N]: ").strip().lower() == "y"
     except EOFError:
@@ -72,13 +70,13 @@ def repodel(names: Optional[List[str]] = None, force: bool = False, all_: bool =
         _logger.info("No repositories to delete.")
         return
 
-    target_names = []
     if all_:
         if not force and not confirm("Delete ALL repositories and their packages?"):
             _logger.info("Operation canceled.")
             return
         target_names = [r["name"] for r in repos]
     else:
+        target_names = []
         for repo in repos:
             if force or confirm(f"Delete repository '{repo['name']}' and its packages?"):
                 target_names.append(repo["name"])
@@ -95,7 +93,7 @@ def search(patterns: List[str], repoids: Optional[List[str]] = None, showduplica
         print("No search patterns provided.")
         return
 
-    matched_pkgs = [dict(p) for p in db.search_packages(patterns, repo_names=repoids) or []]
+    matched_pkgs = db.search_packages(patterns, repo_names=repoids) or []
     if not matched_pkgs:
         print("No packages matched your search.")
         return
@@ -104,8 +102,8 @@ def search(patterns: List[str], repoids: Optional[List[str]] = None, showduplica
         newest = {}
         for pkg in matched_pkgs:
             key = (pkg["name"], pkg["arch"])
-            current_version = (pkg.get("epoch", 0), pkg.get("version", ""), pkg.get("release", ""))
-            if key not in newest or current_version > (
+            version_tuple = (pkg.get("epoch", 0), pkg.get("version", ""), pkg.get("release", ""))
+            if key not in newest or version_tuple > (
                 newest[key].get("epoch", 0),
                 newest[key].get("version", ""),
                 newest[key].get("release", ""),
@@ -153,14 +151,19 @@ def resolve(
             for req_name, is_weak in requires_map.get(current_id, []):
                 if not weakdeps and is_weak:
                     continue
+
                 candidate_ids = provides_map.get(req_name, set())
+
+                # fallback: packages with same name
                 if not candidate_ids:
-                    pkg_row = next((p for p in all_packages.values() if p["name"] == req_name), None)
-                    if pkg_row:
-                        candidate_ids.add(pkg_row["id"])
+                    fallback = next((p for p in all_packages.values() if p["name"] == req_name), None)
+                    if fallback:
+                        candidate_ids.add(fallback["id"])
+
                 to_process.extend(cid for cid in candidate_ids if cid not in resolved_ids)
 
     resolved_pkgs = [all_packages[pid] for pid in resolved_ids if pid in all_packages]
+
     if arch:
         resolved_pkgs = [p for p in resolved_pkgs if p["arch"] == arch]
 
@@ -173,6 +176,7 @@ def resolve(
         if pkg["id"] in seen:
             continue
         seen.add(pkg["id"])
+
         branch = "└─" if idx == len(resolved_pkgs) - 1 else "├─"
         print(f"{branch} {pkg['name']}-{pkg['version']}-{pkg['release']} ({pkg['arch']})")
 
@@ -181,50 +185,41 @@ def resolve(
 # Download packages
 # -------------------------------
 def download(
-    packages: list[str],
-    repoids: list[str] | None = None,
-    downloaddir: str | None = None,
+    packages: List[str],
+    repoids: Optional[List[str]] = None,
+    downloaddir: Optional[str] = None,
     resolve: bool = False,
     recurse: bool = False,
     source: bool = False,
     urls: bool = False,
-    arch: str | None = None,
+    arch: Optional[str] = None,
 ):
     """
     Download packages matching patterns from repositories.
-
-    Args:
-        packages: list of package names or patterns
-        repoids: list of repository names to filter
-        downloaddir: directory to save downloaded packages (defaults to Config.download_path)
-        resolve: include dependencies
-        recurse: recursively resolve dependencies (implies resolve)
-        source: download source RPMs instead of binaries
-        urls: print URLs only, do not download
-        arch: filter packages by architecture
     """
-    # Use default from Config if downloaddir not provided
     downloaddir = Path(downloaddir or config.download_path)
     downloaddir.mkdir(parents=True, exist_ok=True)
     _logger.info(f"Using download directory: {downloaddir}")
 
-    # Step 1: fetch packages from DB
+    # Step 1: get list of all packages (then filter)
     all_pkgs = db.search_packages(["*"], repo_names=repoids) or []
     matched_pkgs = [p for p in all_pkgs if match_patterns(p["name"], packages)]
+
     if not matched_pkgs:
         print("No packages matched the download request.")
         return
 
-    # Step 2: resolve dependencies if requested
+    # Step 2: dependency resolution
     if resolve or recurse:
         recursive = recurse
         weakdeps = False
+
         all_packages = db.get_all_packages()
         provides_map = db.get_provides_map()
         requires_map = db.get_requires_map()
 
-        resolved_ids: set[int] = set(p["id"] for p in matched_pkgs)
-        to_process: list[int] = [p["id"] for p in matched_pkgs]
+        resolved_ids: Set[int] = {p["id"] for p in matched_pkgs}
+        to_process: List[int] = [p["id"] for p in matched_pkgs]
 
         while to_process:
             pkg_id = to_process.pop()
@@ -236,24 +231,27 @@ def download(
                 for req_name, is_weak in requires_map.get(pkg_id, []):
                     if not weakdeps and is_weak:
                         continue
+
                     candidate_ids = provides_map.get(req_name, set())
+
                     if not candidate_ids:
-                        pkg_row = next((p for p in all_packages.values() if p["name"] == req_name), None)
-                        if pkg_row:
-                            candidate_ids.add(pkg_row["id"])
+                        fallback = next((p for p in all_packages.values() if p["name"] == req_name), None)
+                        if fallback:
+                            candidate_ids.add(fallback["id"])
+
                     to_process.extend(cid for cid in candidate_ids if cid not in resolved_ids)
 
         matched_pkgs = [all_packages[pid] for pid in resolved_ids if pid in all_packages]
 
-    # Step 3: convert to source packages if requested
+    # Step 3: convert to SRPMs
     if source:
         matched_pkgs = [
-            src_info
+            src_pkg
             for pkg in matched_pkgs
-            if (src_info := db.get_package_info(pkg["repo_name"], pkg.get("sourcerpm") or ""))
+            if (src_pkg := db.get_package_info(pkg["repo_name"], pkg.get("sourcerpm") or ""))
         ]
 
-    # Step 4: filter by architecture
+    # Step 4: arch filter
     if arch:
         matched_pkgs = [p for p in matched_pkgs if p.get("arch") == arch]
 
@@ -261,19 +259,18 @@ def download(
         print("No packages to download after filtering.")
         return
 
-    # Step 5: print URLs only
+    repo_map = {r["name"]: r for r in db.get_repositories()}
+
+    # Step 5: URLs only
     if urls:
-        repo_map = {r["name"]: r for r in db.get_repositories()}
         for pkg in matched_pkgs:
             url = pkg.get("url") or urljoin(
                 repo_map[pkg["repo_name"]]["base_url"].rstrip("/") + "/", pkg["filepath"].lstrip("/")
             )
-            if url:
-                print(url)
+            print(url)
         return
 
-    # Step 6: perform downloads
-    repo_map = {r["name"]: r for r in db.get_repositories()}
+    # Step 6: actual downloads
     for pkg in matched_pkgs:
         repo = repo_map.get(pkg["repo_name"])
         if not repo:
@@ -282,7 +279,9 @@ def download(
 
         url = pkg.get("url") or urljoin(repo["base_url"].rstrip("/") + "/", pkg["filepath"].lstrip("/"))
         dest_file = downloaddir / Path(pkg["filepath"]).name
+
         _logger.info(f"Downloading {pkg['name']}-{pkg['version']}-{pkg['release']} ({pkg.get('arch')}) …")
+
         try:
             downloader.download(url, dest_file)
         except Exception as e:
