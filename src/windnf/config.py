@@ -9,7 +9,7 @@ _logger = setup_logger()
 
 class Config:
     def __init__(self) -> None:
-        self.config_dir = Path.home() / ".windnf"
+        self.config_dir = Path.home() / ".config" / "windnf"
         self.config_dir.mkdir(exist_ok=True)
         self.config_path = self.config_dir / "windnf.conf"
 
