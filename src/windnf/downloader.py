@@ -1,13 +1,12 @@
 # downloader.py
 from __future__ import annotations
 
-import logging
 import subprocess
 import tempfile
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, Union
-
+import urllib3
 import requests
 from requests.adapters import HTTPAdapter, Retry
 from tqdm import tqdm
@@ -49,6 +48,11 @@ class Downloader:
 
         proxy_url = getattr(self.config, "proxy_url", None)
         skip_ssl_verify = getattr(self.config, "skip_ssl_verify", True)
+
+        if skip_ssl_verify:
+            # Disable SSL verification warning
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            logger.warning("Warning: SSL verification is disabled. This may expose your application to security risks!")
 
         if self.backend == DownloaderType.PYTHON:
             # Create a resilient requests.Session
