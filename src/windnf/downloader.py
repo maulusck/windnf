@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Union
+from typing import Any, Optional, Union
 import urllib3
 import requests
 from requests.adapters import HTTPAdapter, Retry

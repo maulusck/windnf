@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
+import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 from .config import Config
 from .nevra import NEVRA
