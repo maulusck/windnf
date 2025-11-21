@@ -3,15 +3,13 @@ from __future__ import annotations
 
 import bz2
 import gzip
-import io
 import logging
 import lzma
 import os
 import tempfile
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urljoin
 
 from .config import Config
