@@ -7,6 +7,7 @@
 - [X] unify db manager return types
 - [ ] think about SRPM management
 - [ ] add `windnf info` command
+- [ ] unify db_manager return types
 - [ ] weakdeps are not parsed from XML thus not working (not in db)
 - [ ] arch other then x86_64 is still untested
 - [ ] add cool banner on interactive mode
