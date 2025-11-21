@@ -1,300 +1,243 @@
 # metadata_manager.py
+from __future__ import annotations
+
 import bz2
 import gzip
 import io
+import logging
 import lzma
 import os
 import tempfile
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 from .config import Config
 from .db_manager import DbManager
 from .downloader import Downloader
-from .logger import setup_logger
 
-_logger = setup_logger()
-
-
-def extract_namespaces(xml_content: str) -> dict:
-    """
-    Extract namespaces from the XML string.
-    Default namespace ("") is mapped to "default".
-    """
-    namespaces = {}
-    for _, elem in ET.iterparse(io.StringIO(xml_content), events=["start-ns"]):
-        prefix, uri = elem
-        if prefix == "":
-            prefix = "default"
-        namespaces[prefix] = uri
-    return namespaces
+logger = logging.getLogger(__name__)
 
 
-def qname(ns: str, tag: str) -> str:
-    """Build a fully-qualified namespace tag."""
-    return f"{{{ns}}}{tag}" if ns else tag
+# ------------------------------------------------------------
+# Decompression
+# ------------------------------------------------------------
+
+
+def _decompress_bytes(data: bytes) -> bytes:
+    """Try gzip, bz2, xz. Return raw data if none apply."""
+    # gzip
+    try:
+        if data.startswith(b"\x1f\x8b"):
+            return gzip.decompress(data)
+    except Exception:
+        pass
+    # bz2
+    try:
+        if data.startswith(b"BZh"):
+            return bz2.decompress(data)
+    except Exception:
+        pass
+    # xz
+    try:
+        if data.startswith(b"\xfd7zXZ\x00"):
+            return lzma.decompress(data)
+    except Exception:
+        pass
+
+    return data
+
+
+# ------------------------------------------------------------
+# Metadata Manager
+# ------------------------------------------------------------
 
 
 class MetadataManager:
-    def __init__(self, downloader: Downloader, db: DbManager) -> None:
-        self.downloader = downloader
-        self.db = db
+    """
+    RPM metadata syncing, but strictly SQLite-first.
 
-    # -------------------------------------------------------------------------
-    # SYNC REPOSITORY
-    # -------------------------------------------------------------------------
-    def sync_repo(self, repo_row: dict) -> None:
+    Logic:
+        - Always pick `<data type="primary_db">`
+        - Download compressed SQLite (.bz2/.gz/.xz)
+        - Decompress → validate SQLite header → temp file
+        - Import via DbManager.import_repodb
+    """
+
+    SQLITE_HEADER = b"SQLite format 3\x00"
+
+    def __init__(self, config: Config, db_manager: DbManager, max_workers: int = 4):
+        self.config = config
+        self.db = db_manager
+        self.downloader = Downloader(self.config)
+        self.max_workers = max_workers
+
+    # --------------------------------------------------------
+    # Main entry: sync one repo
+    # --------------------------------------------------------
+
+    def sync_repo(self, repo_row: Dict[str, Any]) -> None:
         repo_id = repo_row["id"]
-        name = repo_row["name"]
         base_url = repo_row["base_url"]
-        repomd_url = urljoin(base_url, repo_row["repomd_url"])
+        repomd_href = repo_row["repomd_url"]
 
-        _logger.info(f"Syncing repository '{name}' from {repomd_url}")
+        repomd_url = (
+            repomd_href
+            if repomd_href.startswith("http")
+            else urljoin(base_url.rstrip("/") + "/", repomd_href.lstrip("/"))
+        )
 
-        repomd_content = self._download_to_memory(repomd_url)
-        if not repomd_content:
-            _logger.error(f"Failed to download repomd.xml from {repomd_url}")
-            return
+        logger.info("Sync repo '%s' from %s", repo_row["name"], repomd_url)
 
-        repomd_str = repomd_content.decode() if isinstance(repomd_content, bytes) else repomd_content
-        repomd_root = ET.fromstring(repomd_str)
-        namespaces = extract_namespaces(repomd_str)
-        ns_default = namespaces.get("default", "")
-
-        # Find <data type="primary">
-        primary_path = None
-        for data in repomd_root.findall(qname(ns_default, "data")):
-            if data.attrib.get("type") == "primary":
-                loc = data.find(qname(ns_default, "location"))
-                if loc is not None:
-                    primary_path = loc.attrib.get("href")
-                    break
-
-        if not primary_path:
-            _logger.error("Primary location href not found in repomd.xml")
-            return
-
-        primary_url = primary_path if primary_path.startswith("http") else urljoin(base_url, primary_path)
-
-        _logger.info(f"Downloading primary XML from {primary_url}")
-        compressed = self._download_to_memory(primary_url)
-        if not compressed:
-            _logger.error(f"Failed to download primary XML from {primary_url}")
-            return
-
-        primary_xml = self._decompress_data(compressed)
-        if not primary_xml:
-            _logger.error("Failed to decompress primary XML")
-            return
-
-        xml_ns = extract_namespaces(primary_xml)
-        primary_ns = xml_ns.get("default")
-        rpm_ns = xml_ns.get("rpm")
-
-        if not primary_ns or not rpm_ns:
-            _logger.error("Missing required XML namespaces 'default' or 'rpm' in primary XML")
-            return
-
-        self.db.clear_repo_packages(repo_id)
-        self._parse_and_store_packages(repo_id, primary_xml, primary_ns, rpm_ns)
-        self.db.update_repo_timestamp(repo_id, datetime.utcnow().isoformat())
-
-        _logger.info(f"Repository '{name}' sync completed.")
-
-    # -------------------------------------------------------------------------
-    # DOWNLOAD HELPERS
-    # -------------------------------------------------------------------------
-    def _download_to_memory(self, url: str) -> Optional[bytes]:
-        """
-        Download using configured downloader. Returns raw bytes or None on failure.
-        """
-        if self.downloader.downloader_type.name == "PYTHON":
-            try:
-                resp = self.downloader.session.get(url, timeout=60)
-                resp.raise_for_status()
-                return resp.content
-            except Exception as e:
-                _logger.error(f"Downloader error fetching {url}: {e}")
-                return None
-
-        # Powershell fallback
+        # ----------------------------------------------------
+        # Fetch repomd.xml
+        # ----------------------------------------------------
         try:
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp_path = tmp.name
-
-            self.downloader._download_powershell(url, tmp_path)
-
-            with open(tmp_path, "rb") as f:
-                data = f.read()
-
-            try:
-                os.remove(tmp_path)
-            except OSError as e:
-                _logger.warning(f"Failed to delete temp file {tmp_path}: {e}")
-
-            return data
-
+            repomd_bytes = self.downloader.download_to_memory(repomd_url)
         except Exception as e:
-            _logger.error(f"Downloader error fetching {url} via PowerShell: {e}")
+            logger.error("Failed to download repomd.xml for %s: %s", repo_row["name"], e)
+            return
+
+        # ----------------------------------------------------
+        # Locate *actual* primary_db sqlite
+        # ----------------------------------------------------
+        sqlite_url = self._find_primary_sqlite_url(repomd_bytes, base_url)
+        if not sqlite_url:
+            logger.error("No <data type=\"primary_db\"> found in repomd.xml — cannot sync repo '%s'", repo_row["name"])
+            return
+
+        # ----------------------------------------------------
+        # Download + decompress + validate sqlite
+        # ----------------------------------------------------
+        sqlite_temp = self._download_and_extract_sqlite(sqlite_url)
+        if not sqlite_temp:
+            logger.error("Failed to prepare sqlite metadata for repo '%s'", repo_row["name"])
+            return
+
+        logger.info("Using sqlite metadata: %s", sqlite_temp)
+
+        # ----------------------------------------------------
+        # Import into unified DB
+        # ----------------------------------------------------
+        logger.info("Wiping existing packages for repo id %s", repo_id)
+        self.db.wipe_repo_packages(repo_id)
+
+        try:
+            self.db.import_repodb(sqlite_temp, repo_row["name"])
+            self.db.update_repo_timestamp(repo_id, datetime.utcnow().isoformat())
+        except Exception:
+            logger.exception("Failed to import sqlite metadata for repo %s", repo_row["name"])
+        finally:
+            try:
+                os.unlink(sqlite_temp)
+            except Exception:
+                pass
+
+        # ----------------------------------------------------
+        # Optional: link binary → SRPM
+        # ----------------------------------------------------
+        try:
+            self._link_binaries_to_srpm(repo_id)
+        except Exception:
+            logger.exception("linking binaries to SRPM failed for repo_id %s", repo_id)
+
+        logger.info("Sync complete.")
+
+    # --------------------------------------------------------
+    # Step 1: find primary_db sqlite
+    # --------------------------------------------------------
+
+    def _find_primary_sqlite_url(self, repomd_bytes: bytes, base_url: str) -> Optional[str]:
+        # decode XML
+        text = None
+        for enc in ("utf-8", "latin1"):
+            try:
+                text = repomd_bytes.decode(enc)
+                break
+            except Exception:
+                pass
+        if not text:
+            logger.error("repomd.xml decode failed")
             return None
 
-    def _decompress_data(self, data: bytes) -> Optional[str]:
-        """
-        Attempt gzip → bzip2 → xz → fail.
-        """
-        for name, func in [
-            ("gzip", gzip.decompress),
-            ("bzip2", bz2.decompress),
-            ("xz", lzma.decompress),
-        ]:
-            try:
-                decompressed = func(data)
-                _logger.info(f"Decompressed primary XML using {name}")
-                return decompressed.decode("utf-8")
-            except Exception:
+        try:
+            root = ET.fromstring(text)
+        except Exception as e:
+            logger.error("repomd.xml parse failed: %s", e)
+            return None
+
+        ns = {"d": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {"d": ""}
+
+        # STRICT: select <data type="primary_db">
+        for data in root.findall("d:data", ns):
+            if data.get("type") != "primary_db":
                 continue
 
-        _logger.error("Unsupported compression format for primary XML")
+            loc = data.find("d:location", ns)
+            if loc is None:
+                continue
+
+            href = loc.get("href")
+            if not href:
+                continue
+
+            return href if href.startswith("http") else urljoin(base_url.rstrip("/") + "/", href.lstrip("/"))
+
         return None
 
-    # -------------------------------------------------------------------------
-    # PARSE PRIMARY XML
-    # -------------------------------------------------------------------------
-    def _parse_and_store_packages(self, repo_id: int, xml_text: str, primary_ns: str, rpm_ns: str) -> None:
-        root = ET.fromstring(xml_text)
+    # --------------------------------------------------------
+    # Step 2: Download compressed sqlite → decompress → validate
+    # --------------------------------------------------------
 
-        qn = lambda tag: qname(primary_ns, tag)
-        qnr = lambda tag: qname(rpm_ns, tag)
+    def _download_and_extract_sqlite(self, url: str) -> Optional[str]:
+        try:
+            compressed = self.downloader.download_to_memory(url)
+        except Exception as e:
+            logger.error("Failed to download sqlite blob: %s", e)
+            return None
 
-        pkgs = root.findall(qn("package"))
-        total = len(pkgs)
-        _logger.info(f"Total packages in metadata: {total}")
+        data = _decompress_bytes(compressed)
 
-        # Data collected for insertion
-        staged = []  # list: (pkg_dict, provides_set, requires_set, weak_requires_set)
+        # SQLite header validation
+        if not data.startswith(self.SQLITE_HEADER):
+            logger.error("Decompressed file is not SQLite: %s", url)
+            return None
 
-        for i, pkg in enumerate(pkgs, start=1):
+        # Write to temp file
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite")
+        tmp.close()
+        with open(tmp.name, "wb") as f:
+            f.write(data)
 
-            # Helpers
-            def txt(e, tag):
-                el = e.find(qn(tag))
-                return el.text if el is not None else None
+        return tmp.name
 
-            def rtxt(e, tag):
-                el = e.find(qnr(tag))
-                return el.text if el is not None else None
+    # --------------------------------------------------------
+    # SRPM linking
+    # --------------------------------------------------------
 
-            name = txt(pkg, "name")
-            arch = txt(pkg, "arch")
-            summary = txt(pkg, "summary")
-            description = txt(pkg, "description")
-            url = txt(pkg, "url")
+    def _link_binaries_to_srpm(self, repo_id: int) -> None:
+        src_repo = self.db.get_source_repo(repo_id)
+        if not src_repo:
+            logger.debug("No source repo linked for repo_id %s", repo_id)
+            return
 
-            ver_el = pkg.find(qn("version"))
-            version, release, epoch = "", "", 0
-            if ver_el is not None:
-                version = ver_el.get("ver", "")
-                release = ver_el.get("rel", "")
-                try:
-                    epoch = int(ver_el.get("epoch", "0"))
-                except ValueError:
-                    epoch = 0
+        cur = self.db.conn.execute("SELECT pkgKey, name, rpm_sourcerpm FROM packages WHERE repo_id=?", (repo_id,))
 
-            loc_el = pkg.find(qn("location"))
-            filepath = loc_el.get("href") if loc_el is not None else None
-
-            if not name or not filepath:
-                _logger.warning(f"Skipping malformed package (name={name}, path={filepath})")
+        for row in cur.fetchall():
+            pkgKey = row["pkgKey"]
+            sourcerpm = row["rpm_sourcerpm"]
+            if not sourcerpm:
                 continue
 
-            # Optional metadata
-            license_str = vendor_str = group_str = buildhost_str = sourcerpm_str = None
-            provides = set()
-            requires = set()
-            weak_requires = set()
-            files = []
-            hdr_start = hdr_end = None
+            # try find matching SRPM in linked source repo
+            s = self.db.conn.execute(
+                "SELECT pkgKey FROM packages " "WHERE repo_id=? AND name=? AND arch IN ('src','nosrc') LIMIT 1",
+                (src_repo["id"], sourcerpm),
+            ).fetchone()
 
-            fmt = pkg.find(qn("format"))
-            if fmt is not None:
-                license_str = rtxt(fmt, "license")
-                vendor_str = rtxt(fmt, "vendor")
-                group_str = rtxt(fmt, "group")
-                buildhost_str = rtxt(fmt, "buildhost")
-                sourcerpm_str = rtxt(fmt, "sourcerpm")
-
-                hr = fmt.find(qnr("header-range"))
-                if hr is not None:
-                    hdr_start = hr.get("start")
-                    hdr_end = hr.get("end")
-
-                # Provides
-                prov_el = fmt.find(qnr("provides"))
-                if prov_el is not None:
-                    for entry in prov_el.findall(qnr("entry")):
-                        n = entry.get("name")
-                        if n:
-                            provides.add(n)
-
-                # Requires
-                req_el = fmt.find(qnr("requires"))
-                if req_el is not None:
-                    for entry in req_el.findall(qnr("entry")):
-                        n = entry.get("name")
-                        if n:
-                            requires.add(n)
-
-                # Weak requires
-                weak_el = fmt.find(qnr("weakrequires"))
-                if weak_el is not None:
-                    for entry in weak_el.findall(qnr("entry")):
-                        n = entry.get("name")
-                        if n:
-                            weak_requires.add(n)
-
-                # File list
-                files = [f.text for f in fmt.findall(qn("file")) if f.text]
-
-            # Build DB record
-            pkg_dict = {
-                "name": name,
-                "version": version,
-                "release": release,
-                "epoch": epoch,
-                "arch": arch,
-                "filepath": filepath,
-                "summary": summary,
-                "description": description,
-                "license": license_str,
-                "vendor": vendor_str,
-                "group": group_str,
-                "buildhost": buildhost_str,
-                "sourcerpm": sourcerpm_str,
-                "header_range_start": hdr_start,
-                "header_range_end": hdr_end,
-                "packager": txt(pkg, "packager"),
-                "url": url,
-                "files": files,
-            }
-
-            staged.append((pkg_dict, provides, requires, weak_requires))
-
-            if i % 500 == 0 or i == total:
-                _logger.info(f"Parsed {i}/{total} packages ({i/total*100:.2f}%)")
-
-        # Insert packages
-        pkg_ids = self.db.add_packages(repo_id, [p[0] for p in staged])
-
-        # Insert dependencies
-        for idx, pkg_id in enumerate(pkg_ids):
-            provides, requires, weak = staged[idx][1:]
-            if provides:
-                self.db.add_provides(pkg_id, provides)
-            if requires:
-                self.db.add_requires(pkg_id, requires, is_weak=False)
-            if weak:
-                self.db.add_requires(pkg_id, weak, is_weak=True)
-
-        _logger.info(f"Inserted {len(pkg_ids)} packages into the database.")
+            if s:
+                logger.debug("Linked binary pkgKey=%s → SRPM pkgKey=%s", pkgKey, s["pkgKey"])
+            else:
+                logger.debug("No SRPM match for %s in %s", sourcerpm, src_repo["name"])

@@ -1,312 +1,531 @@
 # operations.py
-import fnmatch
+from __future__ import annotations
+
+import logging
 from pathlib import Path
-from typing import List, Optional, Set
-from urllib.parse import urljoin
+from typing import Any, Dict, List, Optional, Sequence
 
 from .config import Config
 from .db_manager import DbManager
 from .downloader import Downloader
-from .logger import setup_logger
 from .metadata_manager import MetadataManager
+from .nevra import NEVRA
 
-_logger = setup_logger()
+logger = logging.getLogger(__name__)
 
-config = Config()
-db = DbManager(config.db_path)
-downloader = Downloader(config)
-metadata_mgr = MetadataManager(downloader, db)
-
-
-# -------------------------------
-# Helper: pattern matching
-# -------------------------------
-def match_patterns(name: str, patterns: List[str]) -> bool:
-    return any(fnmatch.fnmatch(name, pat) for pat in patterns)
+# module-level singletons (initialized by init(cfg))
+_cfg: Optional[Config] = None
+db: Optional[DbManager] = None
+metadata: Optional[MetadataManager] = None
+downloader: Optional[Downloader] = None
 
 
-def confirm(prompt: str) -> bool:
-    try:
-        return input(f"{prompt} [y/N]: ").strip().lower() == "y"
-    except EOFError:
-        return False
+# -------------------------
+# Initialization
+# -------------------------
+def init(config: Config) -> None:
+    """
+    Initialize operations singletons. Call this once (from cli.main) with Config instance.
+    """
+    global _cfg, db, metadata, downloader
+    _cfg = config
+    db = DbManager(_cfg)
+    metadata = MetadataManager(_cfg, db, max_workers=4)
+    downloader = Downloader(_cfg)
+    logger.debug("operations initialized with DB=%s, downloader=%s", _cfg.db_path, _cfg.downloader)
 
 
-# -------------------------------
+# -------------------------
+# Helpers
+# -------------------------
+def _ensure_initialized():
+    if not all((_cfg is not None, db is not None, metadata is not None, downloader is not None)):
+        raise RuntimeError("operations not initialized; call operations.init(config) first")
+
+
+def _resolve_repo_names_to_ids(repo_names: Optional[Sequence[str]]) -> Optional[List[int]]:
+    """
+    Convert a sequence of repository names to repo ids (filter out not found).
+    Returns None if repo_names is falsy (meaning no filter).
+    """
+    _ensure_initialized()
+    if not repo_names:
+        return None
+    out: List[int] = []
+    for n in repo_names:
+        r = db.get_repo(n)
+        if not r:
+            raise ValueError(f"Repository not found: {n}")
+        out.append(int(r["id"]))
+    return out
+
+
+def _nevra_from_row(row: Dict[str, Any]) -> NEVRA:
+    return NEVRA.from_row(row)
+
+
+# -------------------------
 # Repository commands
-# -------------------------------
-def repoadd(name: str, baseurl: str, repomd: str):
-    db.add_repository(name, baseurl, repomd)
-    _logger.info(f"Added repository '{name}'")
+# -------------------------
+def repoadd(name: str, baseurl: str, repomd: str, repo_type: str, source_repo: Optional[str]) -> None:
+    """
+    Add (or update) repository and sync.
+    CLI signature: name, baseurl, --repomd, --type, --source-repo
+    """
+    _ensure_initialized()
+    src_id = None
+    if source_repo:
+        src = db.get_repo(source_repo)
+        if not src:
+            raise ValueError(f"Source repo not found: {source_repo}")
+        src_id = int(src["id"])
+
+    rid = db.add_repo(name=name, base_url=baseurl, repomd_url=repomd, rtype=repo_type, source_repo_id=src_id)
+    print(f"Repository '{name}' added/updated (id={rid}). Starting sync...")
+    repo_row = db.get_repo(int(rid))
+    if repo_row:
+        metadata.sync_repo(repo_row)
+        print("Sync complete.")
+    else:
+        print("Repo created but could not load repository row.")
 
 
-def repolist():
-    repos = db.get_repositories()
-    if not repos:
+def repolink(binary_repo: str, source_repo: str) -> None:
+    """
+    Link a binary repo to a source repo.
+    """
+    _ensure_initialized()
+    db.link_source(binary_repo, source_repo)
+    print(f"Linked binary repo '{binary_repo}' -> source repo '{source_repo}'")
+
+
+def repolist() -> None:
+    """
+    List all configured repositories.
+    """
+    _ensure_initialized()
+    rows = db.list_repos()
+    if not rows:
         print("No repositories configured.")
         return
-    for r in repos:
-        print(f"{r['name']:20} {r['base_url']} (repomd: {r['repomd_url']})")
+    for r in rows:
+        src = r.get("source_repo_id") or "-"
+        print(f"{r['id']:>3} {r['name']:30} {r['base_url']:40} type={r['type']} src_id={src}")
 
 
-def _get_target_repos(names: Optional[List[str]] = None, all_: bool = False):
+def reposync(names: List[str], all_: bool) -> None:
+    """
+    Sync specified repository names, or all if --all.
+    CLI: names (list) and all_ boolean
+    """
+    _ensure_initialized()
     if all_:
-        return db.get_repositories()
-    if not names:
-        return []
-    return [db.get_repo_by_name(n) for n in names if db.get_repo_by_name(n)]
-
-
-def reposync(names: Optional[List[str]] = None, all_: bool = False):
-    repos = _get_target_repos(names, all_)
-    for repo in repos:
-        _logger.info(f"Syncing repository '{repo['name']}' …")
-        metadata_mgr.sync_repo(repo)
-
-
-def repodel(names: Optional[List[str]] = None, force: bool = False, all_: bool = False):
-    repos = _get_target_repos(names, all_)
-    if not repos:
-        _logger.info("No repositories to delete.")
-        return
-
-    if all_:
-        if not force and not confirm("Delete ALL repositories and their packages?"):
-            _logger.info("Operation canceled.")
-            return
-        target_names = [r["name"] for r in repos]
+        repos = db.list_repos()
     else:
-        target_names = []
-        for repo in repos:
-            if force or confirm(f"Delete repository '{repo['name']}' and its packages?"):
-                target_names.append(repo["name"])
+        if not names:
+            print("No repository names provided. Use --all to sync all repositories.")
+            return
+        repos = []
+        for n in names:
+            r = db.get_repo(n)
+            if not r:
+                print(f"Repository not found: {n}")
+                continue
+            repos.append(r)
 
-    for name in target_names:
-        db.delete_repository(name)
-
-
-# -------------------------------
-# Search packages
-# -------------------------------
-def search(patterns: List[str], repoids: Optional[List[str]] = None, showduplicates: bool = False):
-    if not patterns:
-        print("No search patterns provided.")
+    if not repos:
+        print("No repositories to sync.")
         return
 
-    matched_pkgs = db.search_packages(patterns, repo_names=repoids) or []
-    if not matched_pkgs:
-        print("No packages matched your search.")
+    for r in repos:
+        print(f"Syncing {r['name']}...")
+        try:
+            metadata.sync_repo(r)
+        except Exception as e:
+            logger.exception("Failed to sync %s: %s", r["name"], e)
+            print(f"Failed to sync {r['name']}: {e}")
+        else:
+            print(f"Synced {r['name']}")
+
+
+def repodel(names: List[str], all_: bool, force: bool) -> None:
+    """
+    Delete repositories.
+    """
+    _ensure_initialized()
+    if all_:
+        repos = db.list_repos()
+        for r in repos:
+            db.delete_repo(r["id"])
+            print(f"Deleted {r['name']}")
+        return
+
+    if not names:
+        print("No repository names provided.")
+        return
+
+    for n in names:
+        r = db.get_repo(n)
+        if not r:
+            if force:
+                print(f"Repository {n} not found; skipping (force).")
+                continue
+            else:
+                print(f"Repository {n} not found.")
+                continue
+        db.delete_repo(r["id"])
+        print(f"Deleted repository {n}")
+
+
+# -------------------------
+# Package queries
+# -------------------------
+def search(patterns: List[str], repo: Optional[List[str]], showduplicates: bool) -> None:
+    """
+    Search for packages by patterns (wildcards or NEVRA).
+    """
+    _ensure_initialized()
+    repo_ids = _resolve_repo_names_to_ids(repo)
+    results = []
+    for pat in patterns:
+        rows = db.search_packages(pat, repo_filter=repo_ids)
+        results.extend(rows)
+
+    if not results:
+        print("No packages found.")
         return
 
     if not showduplicates:
-        newest = {}
-        for pkg in matched_pkgs:
-            key = (pkg["name"], pkg["arch"])
-            version_tuple = (pkg.get("epoch", 0), pkg.get("version", ""), pkg.get("release", ""))
-            if key not in newest or version_tuple > (
-                newest[key].get("epoch", 0),
-                newest[key].get("version", ""),
-                newest[key].get("release", ""),
-            ):
-                newest[key] = pkg
-        matched_pkgs = list(newest.values())
+        # dedupe by (name, arch) keeping highest NEVRA
+        dedup: Dict[(str, str), Dict[str, Any]] = {}
+        for r in results:
+            key = (r["name"], r.get("arch"))
+            existing = dedup.get(key)
+            if not existing:
+                dedup[key] = r
+            else:
+                a = NEVRA.from_row(r)
+                b = NEVRA.from_row(existing)
+                if a > b:
+                    dedup[key] = r
+        rows = list(dedup.values())
+    else:
+        rows = results
 
-    matched_pkgs.sort(key=lambda p: (p["name"].lower(), -p.get("epoch", 0), p.get("version", ""), p.get("release", "")))
-
-    for pkg in matched_pkgs:
-        print(f"{pkg['name']:<40} {pkg['version']}-{pkg['release']:<20} {pkg['arch']:<10} {pkg['repo_name']}")
-        if pkg.get("summary"):
-            print(f"    {pkg['summary']}")
-
-
-# -------------------------------
-# Dependency resolution (split)
-# -------------------------------
+    for r in rows:
+        nevra = NEVRA.from_row(r)
+        print(str(nevra))
 
 
-def resolve_calc(
-    packages: List[str],
-    repoids: Optional[List[str]] = None,
-    recursive: bool = False,
-    weakdeps: bool = False,
-    arch: Optional[str] = None,
-) -> List[dict]:
+def info(pattern: str, repo: Optional[List[str]]) -> None:
     """
-    Pure dependency calculation.
-    Returns a list of package dicts.
+    Show detailed info for a package matching pattern (NEVRA or name).
     """
-    initial = db.search_packages(packages, repo_names=repoids)
-    if not initial:
-        return []
-
-    all_packages = db.get_all_packages()
-    provides_map = db.get_provides_map()
-    requires_map = db.get_requires_map()
-
-    resolved_ids: Set[int] = set()
-    to_process: List[int] = [p["id"] for p in initial]
-
-    while to_process:
-        pid = to_process.pop()
-        if pid in resolved_ids:
-            continue
-        resolved_ids.add(pid)
-
-        if recursive:
-            for req_name, is_weak in requires_map.get(pid, []):
-                if is_weak and not weakdeps:
-                    continue
-
-                cand_ids = provides_map.get(req_name, set())
-                if not cand_ids:
-                    fallback = next((p for p in all_packages.values() if p["name"] == req_name), None)
-                    if fallback:
-                        cand_ids = {fallback["id"]}
-
-                for cid in cand_ids:
-                    if cid not in resolved_ids:
-                        to_process.append(cid)
-
-    pkgs = [all_packages[i] for i in resolved_ids if i in all_packages]
-
-    if arch:
-        pkgs = [p for p in pkgs if p.get("arch") == arch]
-
-    return pkgs
-
-
-def resolve_print(pkgs: List[dict]):
-    """
-    Print the resolved dependency tree.
-    """
-    if not pkgs:
-        print("No matching packages.")
+    _ensure_initialized()
+    repo_ids = _resolve_repo_names_to_ids(repo)
+    rows = db.search_packages(pattern, repo_filter=repo_ids)
+    if not rows:
+        print("No packages match.")
         return
 
-    seen = set()
-    for idx, pkg in enumerate(pkgs):
-        if pkg["id"] in seen:
-            continue
-        seen.add(pkg["id"])
-        branch = "└─" if idx == len(pkgs) - 1 else "├─"
-        print(f"{branch} {pkg['name']}-{pkg['version']}-{pkg['release']} ({pkg['arch']})")
+    # If multiple matches, choose the newest per NEVRA ordering
+    best = max(rows, key=lambda row: NEVRA.from_row(row))
+    row = best
+    nevra = NEVRA.from_row(row)
+    print(f"Package: {nevra}")
+    print(f" Repo: {row.get('repo_id')}")
+    print(f" Arch: {row.get('arch')}")
+    print(f" Summary: {row.get('summary')}")
+    print(f" URL: {row.get('url') or ''}")
+
+    # fetch provides/requires
+    provs = [
+        dict(x)
+        for x in db.conn.execute(
+            "SELECT name,flags,epoch,version,release FROM provides WHERE pkgKey=?", (row["pkgKey"],)
+        ).fetchall()
+    ]
+    reqs = [
+        dict(x)
+        for x in db.conn.execute(
+            "SELECT name,flags,epoch,version,release,pre FROM requires WHERE pkgKey=?", (row["pkgKey"],)
+        ).fetchall()
+    ]
+
+    if provs:
+        print(" Provides:")
+        for p in provs:
+            print(f"  - {p['name']}")
+
+    if reqs:
+        print(" Requires:")
+        for r in reqs:
+            pre = " (pre)" if r.get("pre") else ""
+            print(f"  - {r['name']}{pre}")
 
 
+# -------------------------
+# Resolver (heuristic)
+# -------------------------
 def resolve(
-    packages: List[str],
-    repoids: Optional[List[str]] = None,
-    recursive: bool = False,
-    weakdeps: bool = False,
-    arch: Optional[str] = None,
-):
+    packages: List[str], repo: Optional[List[str]], weakdeps: bool, recursive: bool, arch: Optional[str]
+) -> None:
     """
-    CLI entry: resolve command.
+    Resolve packages to concrete pkgKey set using a heuristic.
+    Prints the list of NEVRAs resolved.
     """
-    pkgs = resolve_calc(packages, repoids, recursive, weakdeps, arch)
-    resolve_print(pkgs)
+    _ensure_initialized()
+    repo_ids = _resolve_repo_names_to_ids(repo)
+    provides = db.provides_map()
+    requires = db.requires_map()
+
+    # helper to choose best candidate for a requirement dict
+    def choose_candidate(req: Dict[str, Any]):
+        name = req["name"]
+        candidates = list(provides.get(name, []))
+        if not candidates:
+            return None
+        # apply repo and arch filters
+        if repo_ids is not None:
+            candidates = [pk for pk in candidates if db.get_by_key(pk)["repo_id"] in repo_ids]
+        if arch is not None:
+            candidates = [pk for pk in candidates if db.get_by_key(pk)["arch"] == arch]
+        if not candidates:
+            return None
+        # prefer exact epoch/version/release if specified
+        for pk in candidates:
+            prow = db.get_by_key(pk)
+            if req.get("epoch") and str(prow.get("epoch") or "0") != str(req.get("epoch")):
+                continue
+            if req.get("version") and prow.get("version") != req.get("version"):
+                continue
+            if req.get("release") and prow.get("release") != req.get("release"):
+                continue
+            return pk
+        # otherwise pick highest NEVRA
+        best = max(candidates, key=lambda k: NEVRA.from_row(db.get_by_key(k)))
+        return best
+
+    # build initial queue from provided package patterns
+    queue: List[int] = []
+    for p in packages:
+        try:
+            nv = NEVRA.parse(p)
+        except Exception:
+            nv = None
+        if nv:
+            # try exact lookup
+            rows = db.search_packages(str(nv))
+            if rows:
+                queue.append(rows[0]["pkgKey"])
+                continue
+            # fallback newest by name
+            rows = db.search_packages(nv.name, repo_filter=repo_ids)
+            if rows:
+                best = max(rows, key=lambda r: NEVRA.from_row(r))
+                queue.append(best["pkgKey"])
+                continue
+        else:
+            # treat as name
+            rows = db.search_packages(p, repo_filter=repo_ids)
+            if rows:
+                best = max(rows, key=lambda r: NEVRA.from_row(r))
+                queue.append(best["pkgKey"])
+
+    resolved = set()
+    while queue:
+        pk = queue.pop(0)
+        if pk in resolved:
+            continue
+        resolved.add(pk)
+        if not recursive:
+            continue
+        reqs = requires.get(pk, [])
+        for req in reqs:
+            if not weakdeps and req.get("flags") == "weak":
+                continue
+            cand = choose_candidate(req)
+            if cand and cand not in resolved:
+                queue.append(cand)
+
+    # print resolved NEVRAs
+    out = [NEVRA.from_row(db.get_by_key(pk)) for pk in resolved]
+    print("Resolved:")
+    for n in out:
+        print(f"  {n}")
 
 
-# -------------------------------
-# Download packages (uses resolve_calc)
-# -------------------------------
+# -------------------------
+# Downloading
+# -------------------------
 def download(
     packages: List[str],
-    repoids: Optional[List[str]] = None,
-    downloaddir: Optional[str] = None,
-    resolve: bool = False,
-    recurse: bool = False,
-    source: bool = False,
-    urls: bool = False,
-    arch: Optional[str] = None,
-):
+    repo: Optional[List[str]],
+    downloaddir: Optional[str],
+    destdir: Optional[str],
+    resolve_flag: bool,
+    recurse: bool,
+    source: bool,
+    urls: bool,
+    arch: Optional[str],
+) -> None:
     """
-    Download packages using repo_id and relative filepath.
+    Download packages or print URLs.
+    - packages: list of package patterns or NEVRA
+    - repo: list of repo names (optional)
+    - downloaddir/destdir: directories
+    - resolve_flag: whether to resolve dependencies (ignored; we do simple resolution if requested)
+    - recurse: same as resolve for now
+    - source: include SRPMs
+    - urls: print URLs only
+    - arch: architecture filter
     """
-    downloaddir = Path(downloaddir or config.download_path)
-    downloaddir.mkdir(parents=True, exist_ok=True)
-    _logger.info(f"Using download directory: {downloaddir}")
+    _ensure_initialized()
+    repo_ids = _resolve_repo_names_to_ids(repo)
 
-    # Step 1: initial match
-    all_pkgs = db.search_packages(["*"], repo_names=repoids) or []
-    matched = [p for p in all_pkgs if match_patterns(p["name"], packages)]
-    if not matched:
-        print("No packages matched the download request.")
-        return
+    # resolve to concrete pkgKeys
+    # reuse resolve() heuristic but return pkg keys
+    # simplified: if resolve_flag or recurse -> call resolve-like logic to collect set
+    # else expand patterns to best-matching packages
+    selected_pkgkeys = set()
 
-    # Step 2: resolve dependencies if requested
-    if resolve or recurse:
-        matched = resolve_calc(
-            [p["name"] for p in matched],
-            repoids=repoids,
-            recursive=recurse,
-            weakdeps=False,
-            arch=arch,
-        )
+    if resolve_flag or recurse:
+        # call the resolver implemented above but return the set
+        # little helper to reuse above code: replicate minimal logic
+        provides = db.provides_map()
+        requires = db.requires_map()
 
-    # Filter out packages missing repo_id or filepath
-    matched = [p for p in matched if p.get("repo_id") and p.get("filepath")]
-    if not matched:
-        print("No downloadable packages after dependency resolution.")
-        return
+        def pick_for_name(name: str):
+            cands = list(provides.get(name, []))
+            if repo_ids is not None:
+                cands = [pk for pk in cands if db.get_by_key(pk)["repo_id"] in repo_ids]
+            if arch is not None:
+                cands = [pk for pk in cands if db.get_by_key(pk)["arch"] == arch]
+            if not cands:
+                return None
+            best = max(cands, key=lambda k: NEVRA.from_row(db.get_by_key(k)))
+            return best
 
-    # BROKEN - need to think about source repo management
-    # Step 3: convert to SRPMs if requested
-    if source:
-        srpms = []
-        all_repos = db.get_repositories()
-        all_repo_names = [r["name"] for r in all_repos]
+        # seeds
+        queue = []
+        for p in packages:
+            try:
+                nv = NEVRA.parse(p)
+            except Exception:
+                nv = None
+            if nv:
+                rows = db.search_packages(str(nv), repo_filter=repo_ids)
+                if rows:
+                    queue.append(rows[0]["pkgKey"])
+                else:
+                    rows = db.search_packages(nv.name, repo_filter=repo_ids)
+                    if rows:
+                        best = max(rows, key=lambda r: NEVRA.from_row(r))
+                        queue.append(best["pkgKey"])
+            else:
+                rows = db.search_packages(p, repo_filter=repo_ids)
+                if rows:
+                    best = max(rows, key=lambda r: NEVRA.from_row(r))
+                    queue.append(best["pkgKey"])
 
-        for pkg in matched:
-            src_name = pkg.get("sourcerpm")
-            if not src_name:
+        while queue:
+            pk = queue.pop(0)
+            if pk in selected_pkgkeys:
                 continue
+            selected_pkgkeys.add(pk)
+            if not recurse:
+                continue
+            for req in requires.get(pk, []):
+                cand = pick_for_name(req["name"])
+                if cand and cand not in selected_pkgkeys:
+                    queue.append(cand)
+    else:
+        # no resolution: just pick best match for each pattern
+        for p in packages:
+            try:
+                nv = NEVRA.parse(p)
+            except Exception:
+                nv = None
+            rows = db.search_packages(str(nv) if nv else p, repo_filter=repo_ids)
+            if not rows:
+                print(f"No match for {p}")
+                continue
+            best = max(rows, key=lambda r: NEVRA.from_row(r))
+            selected_pkgkeys.add(best["pkgKey"])
 
-            # Search across all repos for the SRPM
-            found_srpm = None
-            for repo_name in all_repo_names:
-                candidates = db.search_packages([src_name], repo_names=[repo_name])
-                if candidates:
-                    found_srpm = candidates[0]  # pick the first match
-                    break
+    # Now we have selected_pkgkeys; build list of NEVRA objects and URLs
+    targets = [db.get_by_key(pk) for pk in selected_pkgkeys]
+    targets = [t for t in targets if t is not None]
 
-            if found_srpm:
-                srpms.append(found_srpm)
+    if not targets:
+        print("No packages selected for download.")
+        return
 
-        matched = srpms
-        if not matched:
-            print("No packages after SRPM conversion.")
-            return
+    # build URL function
+    def build_urls_for_row(row: Dict[str, Any]) -> List[str]:
+        urls = []
+        # prefer explicit 'url' column
+        if row.get("url"):
+            urls.append(row["url"])
+        # try location_base + location_href if present
+        lb = row.get("location_base") or row.get("locationbase") or row.get("location_base_url")
+        lh = row.get("location_href") or row.get("locationhref") or row.get("href")
+        if lb and lh:
+            urls.append(f"{lb.rstrip('/')}/{lh.lstrip('/')}")
+        # fallback to repo base_url + href
+        repo_row = db.get_repo(int(row["repo_id"]))
+        if repo_row and lh:
+            urls.append(f"{repo_row['base_url'].rstrip('/')}/{lh.lstrip('/')}")
+        return urls
 
-    # Step 4: lookup repositories
-    repo_map = {r["id"]: r for r in db.get_repositories()}
-
-    # Step 5: URLs only
+    # if urls flag, print and return
     if urls:
-        for pkg in matched:
-            repo = repo_map.get(pkg["repo_id"])
-            if not repo:
-                _logger.warning(f"Skipping {pkg['name']} (repo not found)")
-                continue
-            url = urljoin(repo["base_url"].rstrip("/") + "/", pkg["filepath"].lstrip("/"))
-            print(url)
+        for row in targets:
+            nevra = NEVRA.from_row(row)
+            ulist = build_urls_for_row(row)
+            if not ulist:
+                print(f"{nevra} -> no URL available")
+            else:
+                for u in ulist:
+                    print(u)
         return
 
-    # Step 6: actual downloads
-    downloaded = 0
-    for pkg in matched:
-        repo = repo_map.get(pkg["repo_id"])
-        if not repo:
-            _logger.warning(f"Skipping {pkg['name']} (repo not found)")
+    # else perform downloads to downloaddir (or config.download_path) and optionally destdir
+    download_dir = Path(downloaddir) if downloaddir else _cfg.download_path
+    dest_dir = Path(destdir) if destdir else None
+    download_dir.mkdir(parents=True, exist_ok=True)
+    if dest_dir:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+    for row in targets:
+        nevra = NEVRA.from_row(row)
+        urls = build_urls_for_row(row)
+        if not urls:
+            print(f"Skipping {nevra}: no URL available")
             continue
-
-        url = urljoin(repo["base_url"].rstrip("/") + "/", pkg["filepath"].lstrip("/"))
-        dest_file = downloaddir / Path(pkg["filepath"]).name
-
-        _logger.info(f"Downloading {pkg['name']}-{pkg['version']}-{pkg['release']} ({pkg.get('arch')})…")
+        url = urls[0]
+        filename = url.split("/")[-1] or f"{nevra.to_nvra()}.rpm"
+        outpath = download_dir / filename
         try:
-            downloader.download(url, dest_file)
-            downloaded += 1
-        except Exception as e:
-            _logger.error(f"Failed to download {pkg['name']}: {e}")
+            # If downloader has download_to_file use it; otherwise write bytes
+            if hasattr(downloader, "download_to_file"):
+                downloader.download_to_file(url, outpath)
+            else:
+                data = downloader.download_to_memory(url)
+                with open(outpath, "wb") as fh:
+                    fh.write(data)
+            print(f"Downloaded {nevra} -> {outpath}")
+            if dest_dir:
+                # copy/move to dest_dir (simple copy)
+                final = dest_dir / filename
+                # use os.replace for atomic move
+                try:
+                    import shutil
 
-    _logger.info(f"Downloaded {downloaded} packages.")
+                    shutil.copy2(outpath, final)
+                    print(f"Copied to {final}")
+                except Exception as e:
+                    print(f"Failed to copy to {final}: {e}")
+        except Exception as e:
+            logger.exception("Download failed for %s: %s", nevra, e)
+            print(f"Failed to download {nevra}: {e}")

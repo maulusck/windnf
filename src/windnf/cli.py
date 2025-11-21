@@ -1,175 +1,119 @@
 # cli.py
 import argparse
+import sys
+from pathlib import Path
+
 from . import operations
-
-
-# -------------------------------------------------------------
-# Helpers
-# -------------------------------------------------------------
-def parse_repoid(value):
-    if not value:
-        return None
-    return [part.strip() for part in value.split(",") if part.strip()]
+from .config import Config
 
 
 def main():
-    parser = argparse.ArgumentParser(description="windnf (DNF simulator for Windows)")
+    # ------------------------
+    # Initialize config + operations
+    # ------------------------
+    config = Config()
+    operations.init(config)
+
+    parser = argparse.ArgumentParser(prog="windnf", description="WINDNF package manager CLI")
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # ---------------------------------------------------------
-    # repoadd
-    # ---------------------------------------------------------
-    p = subparsers.add_parser("repoadd", help="Add a new repository")
-    p.add_argument("name", help="Repository unique identifier")
-    p.add_argument("baseurl", help="Base URL of the repository")
-    p.add_argument(
-        "--repomd",
-        "-m",
-        default="repodata/repomd.xml",
-        help="Path to repository metadata XML (default: repodata/repomd.xml)",
-    )
-    p.set_defaults(func=operations.repoadd)
+    # ------------------------
+    # Repository Commands
+    # ------------------------
 
-    # ---------------------------------------------------------
-    # repolist
-    # ---------------------------------------------------------
-    p = subparsers.add_parser("repolist", help="List configured repositories")
-    p.set_defaults(func=operations.repolist)
+    # repoadd / ra
+    p_repoadd = subparsers.add_parser("repoadd", aliases=["ra"], help="Add (or update) a repository")
+    p_repoadd.add_argument("name")
+    p_repoadd.add_argument("baseurl")
+    p_repoadd.add_argument("--repomd", "-m", default="repodata/repomd.xml")
+    p_repoadd.add_argument("--type", "-t", dest="repo_type", choices=["binary", "source"], default="binary")
+    p_repoadd.add_argument("--source-repo", "-s")
+    p_repoadd.set_defaults(func=operations.repoadd)
 
-    # ---------------------------------------------------------
-    # reposync
-    # ---------------------------------------------------------
-    p = subparsers.add_parser("reposync", help="Synchronize repository metadata")
-    p.add_argument("names", nargs="*", help="Repository names to sync")
-    p.add_argument("--all", "-A", action="store_true", help="Sync all repositories")
-    p.set_defaults(func=operations.reposync)
+    # repolink / rlk
+    p_repolink = subparsers.add_parser("repolink", aliases=["rlk"], help="Link source repo → binary repo")
+    p_repolink.add_argument("binary_repo")
+    p_repolink.add_argument("source_repo")
+    p_repolink.set_defaults(func=operations.repolink)
 
-    # ---------------------------------------------------------
-    # repodel
-    # ---------------------------------------------------------
-    p = subparsers.add_parser("repodel", help="Delete repository and its packages")
-    p.add_argument("names", nargs="*", help="Repository name(s) to delete")
-    p.add_argument("--all", "-A", action="store_true", help="Delete all repositories")
-    p.add_argument("--force", "-f", action="store_true", help="Force deletion")
-    p.set_defaults(func=operations.repodel)
+    # repolist / rl
+    p_repolist = subparsers.add_parser("repolist", aliases=["rl"], help="List repositories")
+    p_repolist.set_defaults(func=operations.repolist)
 
-    # ---------------------------------------------------------
-    # search
-    # ---------------------------------------------------------
-    p = subparsers.add_parser("search", help="Search packages")
-    p.add_argument("patterns", nargs="+", help="Package search patterns (wildcards supported)")
-    p.add_argument("--showduplicates", action="store_true", help="Show all package versions")
-    p.add_argument(
-        "--repo",
-        "--repoid",
-        "-r",
-        dest="repoids",
-        action="append",
-        type=parse_repoid,
-        help="Specify repositories (repeatable, comma-separated allowed)",
-    )
-    p.set_defaults(func=operations.search)
+    # reposync / rs
+    p_reposync = subparsers.add_parser("reposync", aliases=["rs"], help="Sync repository metadata")
+    p_reposync.add_argument("names", nargs="*", help="Repository names")
+    p_reposync.add_argument("--all", "-A", dest="all_", action="store_true")
+    p_reposync.set_defaults(func=operations.reposync)
 
-    # ---------------------------------------------------------
-    # resolve
-    # ---------------------------------------------------------
-    p = subparsers.add_parser("resolve", help="Resolve dependencies (custom)")
-    p.add_argument("packages", nargs="+", help="Packages to resolve (exact match)")
-    p.add_argument(
-        "--repo",
-        "--repoid",
-        "-r",
-        dest="repoids",
-        action="append",
-        type=parse_repoid,
-        help="Repositories to use while resolving dependencies",
-    )
-    p.add_argument("--weakdeps", "-w", action="store_true", help="Include weak/optional dependencies")
-    p.add_argument("--recursive", "-R", action="store_true", help="Resolve dependencies recursively")
-    p.add_argument("--arch", help="Target architecture (e.g., x86_64, aarch64)")
-    p.set_defaults(func=operations.resolve)
+    # repodel / rd
+    p_repodel = subparsers.add_parser("repodel", aliases=["rd"], help="Delete repositories")
+    p_repodel.add_argument("names", nargs="*", help="Repository names")
+    p_repodel.add_argument("--all", "-A", dest="all_", action="store_true")
+    p_repodel.add_argument("--force", "-f", action="store_true")
+    p_repodel.set_defaults(func=operations.repodel)
 
-    # ---------------------------------------------------------
-    # download
-    # ---------------------------------------------------------
-    p = subparsers.add_parser("download", help="Download packages")
-    p.add_argument("packages", nargs="+", help="Package specifiers (names, globs, provides, paths)")
-    p.add_argument(
-        "--repo",
-        "--repoid",
-        "-r",
-        dest="repoids",
-        action="append",
-        type=parse_repoid,
-        help="Repositories to use (repeatable, comma-separated allowed)",
-    )
-    p.add_argument("--downloaddir", "-x", help="Directory to save downloaded packages (default: CWD)")
-    p.add_argument("--destdir", help="Alias for --downloaddir")
-    p.add_argument("--resolve", action="store_true", help="Download dependencies too")
-    p.add_argument("--recurse", "-R", action="store_true", help="Recursively download dependencies (implies --resolve)")
-    p.add_argument("--source", "-S", action="store_true", help="Download SRPMs instead of binary RPMs")
-    p.add_argument("--url", "--urls", dest="urls", action="store_true", help="Print URLs only (do not download)")
-    p.add_argument("--arch", help="Architecture (e.g., x86_64, aarch64)")
-    p.set_defaults(func=operations.download)
+    # ------------------------
+    # Package Queries
+    # ------------------------
 
-    # ---------------------------------------------------------
-    # Parse arguments and normalize
-    # ---------------------------------------------------------
+    # search / s
+    p_search = subparsers.add_parser("search", aliases=["s"], help="Search for packages")
+    p_search.add_argument("patterns", nargs="+")
+    p_search.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
+    p_search.add_argument("--showduplicates", action="store_true")
+    p_search.set_defaults(func=operations.search)
+
+    # info / i
+    p_info = subparsers.add_parser("info", aliases=["i"], help="Show full NEVRA package information")
+    p_info.add_argument("pattern")
+    p_info.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
+    p_info.set_defaults(func=operations.info)
+
+    # ------------------------
+    # Dependency Resolution
+    # ------------------------
+
+    # resolve / rv
+    p_resolve = subparsers.add_parser("resolve", aliases=["rv"], help="Resolve dependency sets")
+    p_resolve.add_argument("packages", nargs="+")
+    p_resolve.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
+    p_resolve.add_argument("--weakdeps", "-w", action="store_true")
+    p_resolve.add_argument("--recursive", "-R", action="store_true")
+    p_resolve.add_argument("--arch")
+    p_resolve.set_defaults(func=operations.resolve)
+
+    # ------------------------
+    # Download / dl
+    # ------------------------
+
+    p_download = subparsers.add_parser("download", aliases=["dl"], help="Download packages / SRPMs")
+    p_download.add_argument("packages", nargs="+")
+    p_download.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
+    p_download.add_argument("--downloaddir", "-x", type=str)
+    p_download.add_argument("--destdir", type=str)
+    p_download.add_argument("--resolve", action="store_true")
+    p_download.add_argument("--recurse", "-R", action="store_true")
+    p_download.add_argument("--source", "-S", action="store_true")
+    p_download.add_argument("--urls", "--url", action="store_true")
+    p_download.add_argument("--arch")
+    p_download.set_defaults(func=operations.download)
+
+    # ------------------------
+    # Parse and execute
+    # ------------------------
     args = parser.parse_args()
+    func = getattr(args, "func", None)
+    if func is None:
+        parser.print_help()
+        sys.exit(1)
 
-    # Flatten repoids
-    if getattr(args, "repoids", None):
-        args.repoids = [repo for sublist in args.repoids for repo in sublist]
+    arg_dict = vars(args)
+    arg_dict.pop("func", None)
+    arg_dict.pop("command", None)
 
-    # destdir alias
-    if getattr(args, "destdir", None):
-        args.downloaddir = args.destdir
-
-    # Validate reposync & repodel
-    if args.command == "reposync" and args.all and args.names:
-        parser.error("reposync: cannot specify names together with --all.")
-    if args.command == "repodel":
-        if args.names and args.all:
-            parser.error("repodel: cannot specify names together with --all.")
-        if not args.names and not args.all:
-            parser.error("repodel: specify one or more repository names or use --all.")
-
-    # ===============================================================
-    # Dispatch
-    # ===============================================================
-    if args.command == "repoadd":
-        return args.func(args.name, args.baseurl, args.repomd)
-    elif args.command == "repolist":
-        return args.func()
-    elif args.command == "reposync":
-        return args.func(None if args.all else args.names, args.all)
-    elif args.command == "repodel":
-        return args.func(args.names, args.force, args.all)
-    elif args.command == "search":
-        return args.func(patterns=args.patterns, repoids=args.repoids, showduplicates=args.showduplicates)
-    elif args.command == "resolve":
-        return args.func(
-            packages=args.packages,
-            repoids=args.repoids,
-            recursive=args.recursive,
-            weakdeps=args.weakdeps,
-            arch=args.arch,
-        )
-    elif args.command == "download":
-        if args.recurse:
-            args.resolve = True
-        return args.func(
-            packages=args.packages,
-            repoids=args.repoids,
-            downloaddir=args.downloaddir,
-            resolve=args.resolve,
-            recurse=args.recurse,
-            source=args.source,
-            urls=args.urls,
-            arch=args.arch,
-        )
-    else:
-        parser.error("Internal error: unknown command.")
+    func(**arg_dict)
 
 
 if __name__ == "__main__":
