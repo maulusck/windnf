@@ -1,4 +1,3 @@
-# nevra.py
 import functools
 import re
 from dataclasses import dataclass
@@ -33,7 +32,6 @@ def rpmvercmp(a: str, b: str) -> int:
     This is not a perfect reimplementation of rpmvercmp but is
     sufficient for sorting versions in common metadata.
     """
-    import re
 
     def split_parts(s: str):
         # split into numeric and non-numeric chunks
@@ -83,9 +81,9 @@ class NEVRA:
     repo_id: Optional[int] = None
     src: bool = False
 
-    # -------------------------
+    # -----
     # Parsing / construction
-    # -------------------------
+    # -----
     @staticmethod
     def parse(s: str) -> "NEVRA":
         """
@@ -148,20 +146,18 @@ class NEVRA:
             return NEVRA.parse(fname)
         except ValueError:
             # fallback: try to locate last ".arch" segment and parse
-            # find last dot
             if "." not in fname:
                 raise ValueError(f"Cannot parse rpm filename into NEVRA: {filename}")
             arch = fname.split(".")[-1]
             base = ".".join(fname.split(".")[:-1])
-            # now base is name-epoch:ver-rel or name-ver-rel
             try:
                 return NEVRA.parse(f"{base}.{arch}")
             except ValueError:
                 raise ValueError(f"Cannot parse rpm filename into NEVRA: {filename}")
 
-    # -------------------------
+    # -----
     # String forms
-    # -------------------------
+    # -----
     def __str__(self) -> str:
         e = f"{self.epoch}:" if self.epoch else ""
         return f"{self.name}-{e}{self.version}-{self.release}.{self.arch}"
@@ -175,11 +171,10 @@ class NEVRA:
         e = f"{self.epoch}:" if self.epoch else ""
         return f"{self.name}-{e}{self.version}-{self.release}.{self.arch}"
 
-    # -------------------------
+    # -----
     # Ordering / comparison
-    # -------------------------
+    # -----
     def _cmp_tuple(self) -> Tuple:
-        # epoch numeric if possible, else 0
         epoch_val = int(self.epoch) if (self.epoch and self.epoch.isdigit()) else 0
         return (self.name, epoch_val, self.version or "", self.release or "", self.arch or "")
 
@@ -191,28 +186,33 @@ class NEVRA:
     def __lt__(self, other: "NEVRA") -> bool:
         if not isinstance(other, NEVRA):
             return NotImplemented
-        # compare name first
+
+        # Name compare
         if self.name != other.name:
             return self.name < other.name
-        # epoch numeric compare
+
+        # Epoch compare numeric
         e1 = int(self.epoch or 0)
         e2 = int(other.epoch or 0)
         if e1 != e2:
             return e1 < e2
-        # version compare
+
+        # Version compare with rpmvercmp
         c = rpmvercmp(self.version or "", other.version or "")
         if c != 0:
             return c < 0
-        # release compare
+
+        # Release compare with rpmvercmp
         c = rpmvercmp(self.release or "", other.release or "")
         if c != 0:
             return c < 0
-        # arch fallback lexicographic
+
+        # Arch compare lexicographic
         return (self.arch or "") < (other.arch or "")
 
-    # -------------------------
+    # -----
     # DB helpers
-    # -------------------------
+    # -----
     def as_db_filters(self) -> Dict[str, Any]:
         """
         Convert to dict of non-None NEVRA fields, suitable to build SQL WHERE clauses.

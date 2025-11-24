@@ -6,8 +6,9 @@ import tempfile
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, Union
-import urllib3
+
 import requests
+import urllib3
 from requests.adapters import HTTPAdapter, Retry
 from tqdm import tqdm
 
@@ -15,7 +16,6 @@ from .config import Config
 from .logger import setup_logger
 
 _logger = setup_logger()
-logger = _logger
 
 
 # Minimal enum to select backend
@@ -52,7 +52,9 @@ class Downloader:
         if skip_ssl_verify:
             # Disable SSL verification warning
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            logger.warning("Warning: SSL verification is disabled. This may expose your application to security risks!")
+            _logger.warning(
+                "Warning: SSL verification is disabled. This may expose your application to security risks!"
+            )
 
         if self.backend == DownloaderType.PYTHON:
             # Create a resilient requests.Session
@@ -98,9 +100,9 @@ class Downloader:
                         if chunk:
                             fh.write(chunk)
                             bar.update(len(chunk))
-            logger.debug("Downloaded %s -> %s (python)", url, output_path)
+            _logger.debug("Downloaded %s -> %s (python)", url, output_path)
         except Exception as e:
-            logger.exception("Python downloader failed for %s: %s", url, e)
+            _logger.exception("Python downloader failed for %s: %s", url, e)
             raise
 
     def _download_powershell_to_file(self, url: str, output_path: Path) -> None:
@@ -112,9 +114,9 @@ class Downloader:
         )
         result = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True)
         if result.returncode != 0:
-            logger.error("PowerShell download failed: %s", result.stderr.strip())
+            _logger.error("PowerShell download failed: %s", result.stderr.strip())
             raise RuntimeError(f"PowerShell download failed: {result.stderr.strip()}")
-        logger.debug("Downloaded %s -> %s (powershell)", url, output_path)
+        _logger.debug("Downloaded %s -> %s (powershell)", url, output_path)
 
     # -------------------------
     # memory-based download
@@ -136,10 +138,10 @@ class Downloader:
                         if chunk:
                             parts.append(chunk)
                     data = b"".join(parts)
-                    logger.debug("Downloaded %d bytes from %s (python)", len(data), url)
+                    _logger.debug("Downloaded %d bytes from %s (python)", len(data), url)
                     return data
             except Exception as e:
-                logger.exception("download_to_memory failed for %s: %s", url, e)
+                _logger.exception("download_to_memory failed for %s: %s", url, e)
                 raise
         else:
             # Powershell: download to temporary file then read bytes
@@ -149,7 +151,7 @@ class Downloader:
                 self._download_powershell_to_file(url, Path(tf.name))
                 with open(tf.name, "rb") as fh:
                     data = fh.read()
-                logger.debug("Downloaded %d bytes from %s (powershell via temp file)", len(data), url)
+                _logger.debug("Downloaded %d bytes from %s (powershell via temp file)", len(data), url)
                 return data
             finally:
                 try:

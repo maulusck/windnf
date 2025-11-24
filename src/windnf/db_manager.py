@@ -1,7 +1,6 @@
 # db_manager.py
 from __future__ import annotations
 
-import logging
 import os
 import sqlite3
 import tempfile
@@ -10,9 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 from .config import Config
+from .logger import setup_logger
 from .nevra import NEVRA
 
-logger = logging.getLogger(__name__)
+_logger = setup_logger()
 
 
 class DbManager:
@@ -38,7 +38,7 @@ class DbManager:
             with open(schema_file, "r", encoding="utf-8") as fh:
                 self.conn.executescript(fh.read())
         else:
-            logger.debug("Schema file not found at %s — assuming DB already initialized.", schema_file)
+            _logger.debug("Schema file not found at %s — assuming DB already initialized.", schema_file)
 
     # -------------------------
     # PRAGMA tuning
@@ -57,7 +57,7 @@ class DbManager:
             try:
                 cur.execute(p)
             except Exception:
-                logger.debug("PRAGMA failed: %s", p)
+                _logger.debug("PRAGMA failed: %s", p)
         cur.close()
 
     # -------------------------
@@ -306,7 +306,7 @@ class DbManager:
             try:
                 cur.execute(f"DETACH DATABASE {attach_alias}")
             except sqlite3.DatabaseError:
-                logger.debug("Detach failed for %s (ignored)", attach_alias)
+                _logger.debug("Detach failed for %s (ignored)", attach_alias)
             cur.close()
 
         return repo_id
@@ -350,40 +350,67 @@ class DbManager:
 
     def search_packages(self, pattern: str, repo_filter: Optional[Sequence[int]] = None) -> List[Dict[str, Any]]:
         """
-        Simple LIKE-search by name or accept NEVRA string.
-        If pattern looks like NEVRA parse, perform attribute filtering.
+        Search packages by substring matching like DNF:
+        - Search in package name and summary with case-insensitive substring match.
+        - Support NEVRA-string parsing for exact matching on name, epoch, version, release, arch.
+        - Repo filtering supported.
         """
-        # If it's a NEVRA string
+
+        self._print_repo_info(repo_filter)
+
         try:
             nv = NEVRA.parse(pattern)
         except Exception:
             nv = None
 
         params: List[Any] = []
-        where = []
+        where_clauses: List[str] = []
+
         if repo_filter:
-            where.append("repo_id IN ({})".format(",".join("?" for _ in repo_filter)))
+            where_clauses.append("repo_id IN ({})".format(",".join("?" for _ in repo_filter)))
             params.extend(repo_filter)
 
         if nv:
-            where.append("name = ?")
+            # Exact matches on NEVRA fields
+            where_clauses.append("name = ?")
             params.append(nv.name)
             if nv.epoch is not None:
-                where.append("epoch = ?")
+                where_clauses.append("epoch = ?")
                 params.append(nv.epoch)
             if nv.version is not None:
-                where.append("version = ?")
+                where_clauses.append("version = ?")
                 params.append(nv.version)
             if nv.release is not None:
-                where.append("release = ?")
+                where_clauses.append("release = ?")
                 params.append(nv.release)
             if nv.arch is not None:
-                where.append("arch = ?")
+                where_clauses.append("arch = ?")
                 params.append(nv.arch)
         else:
-            where.append("name LIKE ?")
-            params.append(pattern.replace("*", "%"))
+            # Substring match on name OR summary with case-insensitive LIKE
+            substr_pattern = f"%{pattern}%"
+            where_clauses.append("(LOWER(name) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))")
+            params.extend([substr_pattern, substr_pattern])
 
-        q = "SELECT * FROM packages WHERE " + (" AND ".join(where) if where else "1")
-        rows = self.conn.execute(q, tuple(params)).fetchall()
-        return [dict(r) for r in rows]
+        query = "SELECT * FROM packages"
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        rows = self.conn.execute(query, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def _print_repo_info(self, repo_ids: Optional[Sequence[int]] = None) -> None:
+        # Fetch repository name(s) and last_updated times, print info like:
+        # "Repository: <repo name> last metadata updated at <time>"
+        # Support multiple repo ids by printing each line.
+        if repo_ids is None:
+            # If None, print info for all repos
+            repos = self.conn.execute("SELECT name, last_updated FROM repositories ORDER BY name").fetchall()
+        else:
+            q = "SELECT name, last_updated FROM repositories WHERE id IN ({})".format(",".join("?" for _ in repo_ids))
+            repos = self.conn.execute(q, tuple(repo_ids)).fetchall()
+
+        for r in repos:
+            name = r["name"]
+            last_upd = r["last_updated"] or "never"
+            print(f"Repository: {name} last metadata updated at {last_upd}")

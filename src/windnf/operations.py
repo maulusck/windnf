@@ -1,17 +1,19 @@
 # operations.py
 from __future__ import annotations
 
-import logging
+import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .config import Config
 from .db_manager import DbManager
 from .downloader import Downloader
+from .logger import Colors, setup_logger
 from .metadata_manager import MetadataManager
 from .nevra import NEVRA
 
-logger = logging.getLogger(__name__)
+_logger = setup_logger()
 
 # module-level singletons (initialized by init(cfg))
 _cfg: Optional[Config] = None
@@ -30,9 +32,9 @@ def init(config: Config) -> None:
     global _cfg, db, metadata, downloader
     _cfg = config
     db = DbManager(_cfg)
-    metadata = MetadataManager(_cfg, db, max_workers=4)
     downloader = Downloader(_cfg)
-    logger.debug("operations initialized with DB=%s, downloader=%s", _cfg.db_path, _cfg.downloader)
+    metadata = MetadataManager(_cfg, db, downloader, max_workers=4)
+    _logger.debug("operations initialized with DB=%s, downloader=%s", _cfg.db_path, _cfg.downloader)
 
 
 # -------------------------
@@ -62,6 +64,22 @@ def _resolve_repo_names_to_ids(repo_names: Optional[Sequence[str]]) -> Optional[
 
 def _nevra_from_row(row: Dict[str, Any]) -> NEVRA:
     return NEVRA.from_row(row)
+
+
+def highlight_match(text: str, pattern: str) -> str:
+    """Highlight all occurrences of pattern (case-insensitive) in the text using Colors constants."""
+    pattern_re = re.compile(re.escape(pattern), re.IGNORECASE)
+    return pattern_re.sub(lambda m: f"{Colors.FG_BRIGHT_RED}{Colors.BOLD}{m.group(0)}{Colors.RESET}", text)
+
+
+def print_delimiter(title: str):
+    """Print a terminal-width delimiter line with a centered title."""
+    width = shutil.get_terminal_size((80, 20)).columns
+    delimiter = "="
+    title_len = len(title) + 2  # spaces around title
+    side_len = (width - title_len) // 2
+    line = delimiter * side_len + f" {title} " + delimiter * (width - side_len - title_len)
+    print(line)
 
 
 # -------------------------
@@ -142,7 +160,7 @@ def reposync(names: List[str], all_: bool) -> None:
         try:
             metadata.sync_repo(r)
         except Exception as e:
-            logger.exception("Failed to sync %s: %s", r["name"], e)
+            _logger.exception("Failed to sync %s: %s", r["name"], e)
             print(f"Failed to sync {r['name']}: {e}")
         else:
             print(f"Synced {r['name']}")
@@ -180,41 +198,98 @@ def repodel(names: List[str], all_: bool, force: bool) -> None:
 # -------------------------
 # Package queries
 # -------------------------
-def search(patterns: List[str], repo: Optional[List[str]], showduplicates: bool) -> None:
+def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = False) -> None:
     """
-    Search for packages by patterns (wildcards or NEVRA).
-    """
-    _ensure_initialized()
-    repo_ids = _resolve_repo_names_to_ids(repo)
-    results = []
-    for pat in patterns:
-        rows = db.search_packages(pat, repo_filter=repo_ids)
-        results.extend(rows)
+    Search for packages matching any of the patterns in name or summary fields.
 
-    if not results:
+    Prints grouped results:
+    - Name & Summary matched
+    - Summary-only matched
+    - Name-only matched
+
+    Matches are highlighted. Results follow DNF-style NEVRA : summary printout.
+    """
+
+    from . import operations
+
+    db = operations.db
+    if db is None:
+        raise RuntimeError("Database not initialized")
+
+    repoids = operations._resolve_repo_names_to_ids(repo) if repo else None
+
+    all_results: List[Dict[str, Any]] = []
+    for pat in patterns:
+        rows = db.search_packages(pat, repo_filter=repoids)
+        all_results.extend(rows)
+
+    if not all_results:
         print("No packages found.")
         return
 
-    if not showduplicates:
-        # dedupe by (name, arch) keeping highest NEVRA
-        dedup: Dict[(str, str), Dict[str, Any]] = {}
-        for r in results:
-            key = (r["name"], r.get("arch"))
-            existing = dedup.get(key)
-            if not existing:
-                dedup[key] = r
-            else:
-                a = NEVRA.from_row(r)
-                b = NEVRA.from_row(existing)
-                if a > b:
-                    dedup[key] = r
-        rows = list(dedup.values())
-    else:
-        rows = results
+    # Deduplicate by NEVRA components
+    dedup: Dict[str, Dict[str, Any]] = {}
+    for r in all_results:
+        nevra_obj = NEVRA.from_row(r)
+        key = f"{nevra_obj.name}|{nevra_obj.epoch}|{nevra_obj.version}|{nevra_obj.release}|{nevra_obj.arch}"
+        if not showduplicates:
+            if key in dedup:
+                continue
+        dedup[key] = r
 
-    for r in rows:
-        nevra = NEVRA.from_row(r)
-        print(str(nevra))
+    results = list(dedup.values())
+
+    for pat in patterns:
+        name_summary = []
+        name_only = []
+        summary_only = []
+
+        for r in results:
+            name = r.get("name", "")
+            summary = r.get("summary", "")
+            pat_lower = pat.lower()
+
+            matched_in_name = pat_lower in name.lower()
+            matched_in_summary = pat_lower in summary.lower()
+
+            nevra_obj = NEVRA.from_row(r)
+            nevra_str = str(nevra_obj)
+
+            displayed_name = name
+            displayed_summary = summary
+            if matched_in_name:
+                displayed_name = highlight_match(displayed_name, pat)
+            if matched_in_summary:
+                displayed_summary = highlight_match(displayed_summary, pat)
+
+            # Include highlighted name in the output line (replace nevra name with highlighted name)
+            # If you want to maintain the NEVRA canonical format, replace only the name part:
+            nevra_parts = nevra_str.split("-", 1)
+            nevra_str_highlighted = f"{displayed_name}-{nevra_parts[1]}" if len(nevra_parts) > 1 else displayed_name
+
+            output_line = f"{nevra_str_highlighted} : {displayed_summary}"
+
+            if matched_in_name and matched_in_summary:
+                name_summary.append(output_line)
+            elif matched_in_summary:
+                summary_only.append(output_line)
+            elif matched_in_name:
+                name_only.append(output_line)
+
+        if name_summary:
+            print_delimiter(f"Name & Summary Matched: {pat}")
+            for line in name_summary:
+                print(line)
+
+        if name_only:
+            print_delimiter(f"Name Matched: {pat}")
+            for line in name_only:
+                print(line)
+
+        if summary_only:
+            print_delimiter(f"Summary Matched: {pat}")
+            for line in summary_only:
+                print(line)
 
 
 def info(pattern: str, repo: Optional[List[str]]) -> None:
@@ -527,5 +602,5 @@ def download(
                 except Exception as e:
                     print(f"Failed to copy to {final}: {e}")
         except Exception as e:
-            logger.exception("Download failed for %s: %s", nevra, e)
+            _logger.exception("Download failed for %s: %s", nevra, e)
             print(f"Failed to download {nevra}: {e}")

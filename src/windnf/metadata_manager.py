@@ -4,7 +4,6 @@ from __future__ import annotations
 import bz2
 import gzip
 import io
-import logging
 import lzma
 import os
 import tempfile
@@ -17,8 +16,9 @@ from urllib.parse import urljoin
 from .config import Config
 from .db_manager import DbManager
 from .downloader import Downloader
+from .logger import setup_logger
 
-logger = logging.getLogger(__name__)
+_logger = setup_logger()
 
 
 # ------------------------------------------------------------
@@ -68,10 +68,10 @@ class MetadataManager:
 
     SQLITE_HEADER = b"SQLite format 3\x00"
 
-    def __init__(self, config: Config, db_manager: DbManager, max_workers: int = 4):
+    def __init__(self, config: Config, db_manager: DbManager, downloader: Downloader, max_workers: int = 4):
         self.config = config
         self.db = db_manager
-        self.downloader = Downloader(self.config)
+        self.downloader = downloader
         self.max_workers = max_workers
 
     # --------------------------------------------------------
@@ -89,7 +89,7 @@ class MetadataManager:
             else urljoin(base_url.rstrip("/") + "/", repomd_href.lstrip("/"))
         )
 
-        logger.info("Sync repo '%s' from %s", repo_row["name"], repomd_url)
+        _logger.info("Sync repo '%s' from %s", repo_row["name"], repomd_url)
 
         # ----------------------------------------------------
         # Fetch repomd.xml
@@ -97,7 +97,7 @@ class MetadataManager:
         try:
             repomd_bytes = self.downloader.download_to_memory(repomd_url)
         except Exception as e:
-            logger.error("Failed to download repomd.xml for %s: %s", repo_row["name"], e)
+            _logger.error("Failed to download repomd.xml for %s: %s", repo_row["name"], e)
             return
 
         # ----------------------------------------------------
@@ -105,7 +105,7 @@ class MetadataManager:
         # ----------------------------------------------------
         sqlite_url = self._find_primary_sqlite_url(repomd_bytes, base_url)
         if not sqlite_url:
-            logger.error("No <data type=\"primary_db\"> found in repomd.xml — cannot sync repo '%s'", repo_row["name"])
+            _logger.error("No <data type=\"primary_db\"> found in repomd.xml — cannot sync repo '%s'", repo_row["name"])
             return
 
         # ----------------------------------------------------
@@ -113,22 +113,22 @@ class MetadataManager:
         # ----------------------------------------------------
         sqlite_temp = self._download_and_extract_sqlite(sqlite_url)
         if not sqlite_temp:
-            logger.error("Failed to prepare sqlite metadata for repo '%s'", repo_row["name"])
+            _logger.error("Failed to prepare sqlite metadata for repo '%s'", repo_row["name"])
             return
 
-        logger.info("Using sqlite metadata: %s", sqlite_temp)
+        _logger.info("Using sqlite metadata: %s", sqlite_temp)
 
         # ----------------------------------------------------
         # Import into unified DB
         # ----------------------------------------------------
-        logger.info("Wiping existing packages for repo id %s", repo_id)
+        _logger.info("Wiping existing packages for repo id %s", repo_id)
         self.db.wipe_repo_packages(repo_id)
 
         try:
             self.db.import_repodb(sqlite_temp, repo_row["name"])
             self.db.update_repo_timestamp(repo_id, datetime.utcnow().isoformat())
         except Exception:
-            logger.exception("Failed to import sqlite metadata for repo %s", repo_row["name"])
+            _logger.exception("Failed to import sqlite metadata for repo %s", repo_row["name"])
         finally:
             try:
                 os.unlink(sqlite_temp)
@@ -141,9 +141,9 @@ class MetadataManager:
         try:
             self._link_binaries_to_srpm(repo_id)
         except Exception:
-            logger.exception("linking binaries to SRPM failed for repo_id %s", repo_id)
+            _logger.exception("linking binaries to SRPM failed for repo_id %s", repo_id)
 
-        logger.info("Sync complete.")
+        _logger.info("Sync complete.")
 
     # --------------------------------------------------------
     # Step 1: find primary_db sqlite
@@ -159,13 +159,13 @@ class MetadataManager:
             except Exception:
                 pass
         if not text:
-            logger.error("repomd.xml decode failed")
+            _logger.error("repomd.xml decode failed")
             return None
 
         try:
             root = ET.fromstring(text)
         except Exception as e:
-            logger.error("repomd.xml parse failed: %s", e)
+            _logger.error("repomd.xml parse failed: %s", e)
             return None
 
         ns = {"d": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {"d": ""}
@@ -195,14 +195,14 @@ class MetadataManager:
         try:
             compressed = self.downloader.download_to_memory(url)
         except Exception as e:
-            logger.error("Failed to download sqlite blob: %s", e)
+            _logger.error("Failed to download sqlite blob: %s", e)
             return None
 
         data = _decompress_bytes(compressed)
 
         # SQLite header validation
         if not data.startswith(self.SQLITE_HEADER):
-            logger.error("Decompressed file is not SQLite: %s", url)
+            _logger.error("Decompressed file is not SQLite: %s", url)
             return None
 
         # Write to temp file
@@ -220,7 +220,7 @@ class MetadataManager:
     def _link_binaries_to_srpm(self, repo_id: int) -> None:
         src_repo = self.db.get_source_repo(repo_id)
         if not src_repo:
-            logger.debug("No source repo linked for repo_id %s", repo_id)
+            _logger.debug("No source repo linked for repo_id %s", repo_id)
             return
 
         cur = self.db.conn.execute("SELECT pkgKey, name, rpm_sourcerpm FROM packages WHERE repo_id=?", (repo_id,))
@@ -238,6 +238,6 @@ class MetadataManager:
             ).fetchone()
 
             if s:
-                logger.debug("Linked binary pkgKey=%s → SRPM pkgKey=%s", pkgKey, s["pkgKey"])
+                _logger.debug("Linked binary pkgKey=%s → SRPM pkgKey=%s", pkgKey, s["pkgKey"])
             else:
-                logger.debug("No SRPM match for %s in %s", sourcerpm, src_repo["name"])
+                _logger.debug("No SRPM match for %s in %s", sourcerpm, src_repo["name"])
