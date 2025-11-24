@@ -1,6 +1,6 @@
 # winDNF CLI Project Overview
 
-This document provides a comprehensive explanation of the **winDNF CLI project**, including its purpose, functionality, and design philosophy. It is written in a way that an AI or a new developer can understand the project as a whole without diving into implementation details.
+This document provides a comprehensive explanation of the **winDNF CLI project**, including its purpose, functionality, NEVRA-aware package handling, and integrated repodata database support. It is written so that an AI or a new developer can understand the project holistically without diving into implementation details.
 
 ---
 
@@ -9,115 +9,131 @@ This document provides a comprehensive explanation of the **winDNF CLI project**
 The **winDNF CLI** is a command-line interface tool designed to manage software repositories and packages in a **DNF/YUM-style workflow**. Its main goals are:
 
 1. **Repository Management:** Add, remove, list, and synchronize repositories.
-2. **Package Discovery:** Search packages across configured repositories.
-3. **Dependency Resolution:** Resolve package dependencies with optional recursive and weak dependency support.
-4. **Package Downloading:** Download packages and their dependencies, with flexible options for architecture, source/binary packages, and destination directories.
+2. **Package Discovery:** Search packages across configured repositories with NEVRA awareness.
+3. **Dependency Resolution:** Resolve dependency trees with optional recursive and weak dependency support.
+4. **Package Downloading:** Download packages and their dependencies, supporting architecture filtering and SRPM/Binary RPM selection.
+5. **Repodata Integration:** Import and unify metadata from both `primary.sqlite` and `primary.xml` sources into a consistent internal database.
 
-The tool is **repository-agnostic**, meaning it works with multiple repositories defined by the user, rather than being tied to a single package source.
+The tool is **repository-agnostic**, supporting any number of independently defined repositories.
 
 ---
 
 ## Key Concepts
 
 ### Repositories
-- A repository is a collection of packages hosted at a given URL.
-- Each repository is uniquely identified by a `name`.
-- Metadata about packages is stored in `repomd.xml` or similar files.
-- Users can configure multiple repositories and control which ones are used for searches, dependency resolution, and downloads.
+- A repository is a collection of packages hosted at a specified URL.
+- Each repository has a unique `name`.
+- Metadata is obtained through `repomd.xml`, which may reference:
+  - **primary.sqlite** (SQLite metadata)
+  - **primary.xml** (XML metadata)
+- winDNF supports **both formats seamlessly**, importing them into a unified internal metadata database.
+- The internal DB schema matches standard DNF/YUM metadata:
+  - Packages, Provides, Requires, Files, Conflicts, Obsoletes, etc.
+  - **Plus an extra `repositories` table** to track package → repo origin.
 
 ### Packages
-- Packages are the individual software components.
-- The tool supports searching by **name, description, URL, or globs/wildcards**.
-- Packages can be **binary RPMs** or **source RPMs (SRPMs)**.
-- Dependency management is handled optionally recursively and can include weak/optional dependencies.
+- Packages are represented and compared using full **NEVRA** fields:
+  - **N**ame  
+  - **E**poch  
+  - **V**ersion  
+  - **R**elease  
+  - **A**rchitecture  
+- winDNF supports searching by:
+  - NEVRA
+  - Name or globs
+  - Description
+  - URL
+- Both **binary RPMs** and **source RPMs (SRPMs)** are supported.
+- Dependency management supports recursive expansion and optional weak dependencies.
 
 ---
 
 ## Commands Overview
 
-The CLI is structured into **subcommands** with consistent patterns:
+The CLI follows a DNF-style subcommand pattern, providing a clear set of actions:
 
-### 1. `repoadd`
-- Adds a new repository.
-- Requires:
-  - `name` — unique identifier.
-  - `baseurl` — location of repository files.
-- Optional:
-  - `--repomd` — path to repository metadata XML.
+### Repository Commands
+- **`repoadd`** — Add a new repository (name + baseurl). Supports automatic repodata detection and optional repomd override.
+- **`repolist`** — Display all configured repositories.
+- **`reposync`** — Fetch and import repository metadata (SQLite or XML). Supports syncing specific repos or all repos at once.
+- **`repodel`** — Remove repositories and optionally delete their stored metadata.
+- **`repolink`** — Associate a binary repository with a corresponding source repository.
 
-### 2. `repolist`
-- Lists all configured repositories.
-- Useful to check which repositories are currently active.
+### Package Query Commands
+- **`search`** — Search packages by name, NEVRA, or wildcard patterns. Supports duplicate display and repo filtering.
+- **`info`** — Show detailed NEVRA package information, including dependencies and repo origin.
 
-### 3. `reposync`
-- Synchronizes local metadata with remote repository.
-- Options:
-  - Specify repository names or use `--all` to sync all.
+### Dependency & Resolution Commands
+- **`resolve`** — Compute dependencies for one or more packages. Supports weak deps, recursive resolution, architecture filtering, and repo selection.
 
-### 4. `repodel`
-- Deletes repositories and optionally all their packages.
-- Options:
-  - `--all` — delete all repositories.
-  - `--force` — force deletion without confirmation.
+### Download Commands
+- **`download`** — Download packages or SRPMs. Supports dependency downloading, listing URLs without downloading, architecture constraints, and selecting output directories.
 
-### 5. `search`
-- Searches packages by pattern.
-- Options:
-  - `--all` — include description and URL, use OR matching.
-  - `--showduplicates` — show all versions of each package.
-  - `--repo` — specify repositories (can be repeated, comma-separated).
+---
 
-### 6. `resolve`
-- Resolves package dependencies.
-- Options:
-  - `--weakdeps` — include optional/weak dependencies.
-  - `--recursive` — resolve dependencies recursively.
-  - `--arch` — target architecture.
-  - `--repo` — restrict to specific repositories.
+## Repodata & Database Integration
 
-### 7. `download`
-- Downloads packages (binary or source) with optional dependency resolution.
-- Options:
-  - `--downloaddir` or `--destdir` — specify destination directory.
-  - `--resolve` — download all dependencies.
-  - `--source` — download source RPMs instead of binaries.
-  - `--urls` — print download URLs instead of downloading.
-  - `--arch` — specify architecture.
-  - `--repo` — restrict to specific repositories.
+winDNF imports repository metadata into a unified internal database for fast, consistent operations.
+
+### Supported Formats
+- **primary.sqlite**
+  - Imported using SQLite readers directly.
+- **primary.xml**
+  - Parsed and converted into the same schema as SQLite metadata.
+
+### Unified Metadata Schema
+The DB mirrors standard DNF metadata tables:
+- Packages  
+- Provides / Requires  
+- Conflicts / Obsoletes  
+- Files  
+- Etc.
+
+With an additional:
+- **`repositories` table**, mapping each package record to its originating repository.
+
+This enables:
+- Fast search  
+- Accurate NEVRA comparisons  
+- Cross-repository dependency resolution  
+- Deterministic package matching  
 
 ---
 
 ## CLI Design Principles
 
-1. **DNF-style commands:** Each command behaves similarly to a DNF/YUM subcommand for familiarity.
-2. **Extensible:** Supports multiple repositories, flexible search, and downloads.
-3. **Declarative Options:** Users specify what to do (add repo, download package) and the CLI handles orchestration.
-4. **Validation:** Conflicting or missing options are detected and reported (e.g., `--all` cannot be combined with specific repo names).
+1. **DNF-like behavior:** Commands follow familiar patterns for users from RPM-based ecosystems.
+2. **NEVRA-accurate operations:** All version comparisons and dependency matches use full NEVRA semantics.
+3. **Format-agnostic repodata importing:** SQLite or XML repos behave identically after import.
+4. **Extensibility:** Multiple repos, flexible search modes, advanced resolution logic.
+5. **Strong validation:** Detects invalid combinations such as `--all` + specific repo names.
 
 ---
 
 ## Parameter Handling
 
-- **Repository IDs (`repoids`)**:
-  - Can be provided multiple times, and as comma-separated lists.
-  - Flattened into a single list internally for consistent processing.
-- **Directory Options (`downloaddir` / `destdir`)**:
-  - Aliases supported for convenience.
-- **Boolean Flags**:
-  - `--all`, `--force`, `--recursive`, `--weakdeps`, `--showduplicates`, `--source`, `--urls`
-  - These flags toggle specific behavior without requiring a value.
+- **Repository Selectors**
+  - Multiple `--repo` values permitted.
+  - Comma-separated lists supported.
+- **Directory Options**
+  - `--downloaddir` and `--destdir` are interchangeable.
+- **Boolean Flags**
+  - `--all`, `--force`, `--recursive`, `--weakdeps`, `--source`,  
+    `--urls`, `--showduplicates`
+
+These influence behavior without requiring explicit values.
 
 ---
 
 ## Summary
 
-The **winDNF CLI** is a repository and package management tool that provides:
+The **winDNF CLI** is a flexible, NEVRA-aware package and repository management tool designed for multi-repository workflows. It provides:
 
-- Repository lifecycle management (add, list, sync, delete)
-- Flexible package search and dependency resolution
-- Advanced downloading features (dependencies, architecture, source/binary)
-- DNF-style command structure for familiarity and consistency
+- Full repository lifecycle operations
+- Unified metadata ingestion from SQLite or XML repodata
+- Accurate NEVRA-based search and dependency resolution
+- Robust downloading capabilities
+- A familiar DNF-style interface
 
-It is designed to be **user-friendly, flexible, and extensible**, allowing users to handle repositories and packages efficiently in a scripted or interactive environment.
+It aims to be **user-friendly, fast, and extensible**, suitable for automated workflows and interactive use alike.
 
----
