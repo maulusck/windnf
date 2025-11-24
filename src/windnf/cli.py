@@ -13,6 +13,7 @@ def main():
     # ------------------------
     config = Config()
     operations.init(config)
+    operations._ensure_initialized()
 
     parser = argparse.ArgumentParser(prog="windnf", description="WINDNF package manager CLI")
 

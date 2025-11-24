@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from .config import Config
 from .db_manager import DbManager
@@ -26,9 +26,7 @@ downloader: Optional[Downloader] = None
 # Initialization
 # -------------------------
 def init(config: Config) -> None:
-    """
-    Initialize operations singletons. Call this once (from cli.main) with Config instance.
-    """
+    """Initialize singleton instances from config."""
     global _cfg, db, metadata, downloader
     _cfg = config
     db = DbManager(_cfg)
@@ -37,46 +35,46 @@ def init(config: Config) -> None:
     _logger.debug("operations initialized with DB=%s, downloader=%s", _cfg.db_path, _cfg.downloader)
 
 
-# -------------------------
-# Helpers
-# -------------------------
-def _ensure_initialized():
-    if not all((_cfg is not None, db is not None, metadata is not None, downloader is not None)):
+def _ensure_initialized() -> None:
+    if not all((_cfg, db, metadata, downloader)):
         raise RuntimeError("operations not initialized; call operations.init(config) first")
 
 
 def _resolve_repo_names_to_ids(repo_names: Optional[Sequence[str]]) -> Optional[List[int]]:
-    """
-    Convert a sequence of repository names to repo ids (filter out not found).
-    Returns None if repo_names is falsy (meaning no filter).
-    """
-    _ensure_initialized()
+    """Resolve repository names to IDs; None means no repo filter."""
     if not repo_names:
         return None
     out: List[int] = []
-    for n in repo_names:
-        r = db.get_repo(n)
-        if not r:
-            raise ValueError(f"Repository not found: {n}")
-        out.append(int(r["id"]))
+    for name in repo_names:
+        repo = db.get_repo(name)
+        if not repo:
+            raise ValueError(f"Repository not found: {name}")
+        out.append(int(repo["id"]))
     return out
 
 
-def _nevra_from_row(row: Dict[str, Any]) -> NEVRA:
-    return NEVRA.from_row(row)
-
-
 def highlight_match(text: str, pattern: str) -> str:
-    """Highlight all occurrences of pattern (case-insensitive) in the text using Colors constants."""
+    """Highlight all case-insensitive occurrences of pattern in text using ANSI colors."""
+    if not pattern:
+        return text
     pattern_re = re.compile(re.escape(pattern), re.IGNORECASE)
     return pattern_re.sub(lambda m: f"{Colors.FG_BRIGHT_RED}{Colors.BOLD}{m.group(0)}{Colors.RESET}", text)
 
 
-def print_delimiter(title: str):
-    """Print a terminal-width delimiter line with a centered title."""
+def highlight_name_in_nevra(nevra_str: str, name: str, pattern: Optional[str]) -> str:
+    """Highlight only the first occurrence of name in the NEVRA string."""
+    if not pattern or not name:
+        return nevra_str
+    highlighted_name = highlight_match(name, pattern)
+    escaped_name = re.escape(name)
+    return re.sub(escaped_name, highlighted_name, nevra_str, count=1, flags=re.IGNORECASE)
+
+
+def print_delimiter(title: str) -> None:
+    """Print a terminal-width delimiter with centered title."""
     width = shutil.get_terminal_size((80, 20)).columns
     delimiter = "="
-    title_len = len(title) + 2  # spaces around title
+    title_len = len(title) + 2
     side_len = (width - title_len) // 2
     line = delimiter * side_len + f" {title} " + delimiter * (width - side_len - title_len)
     print(line)
@@ -90,7 +88,6 @@ def repoadd(name: str, baseurl: str, repomd: str, repo_type: str, source_repo: O
     Add (or update) repository and sync.
     CLI signature: name, baseurl, --repomd, --type, --source-repo
     """
-    _ensure_initialized()
     src_id = None
     if source_repo:
         src = db.get_repo(source_repo)
@@ -112,7 +109,6 @@ def repolink(binary_repo: str, source_repo: str) -> None:
     """
     Link a binary repo to a source repo.
     """
-    _ensure_initialized()
     db.link_source(binary_repo, source_repo)
     print(f"Linked binary repo '{binary_repo}' -> source repo '{source_repo}'")
 
@@ -121,7 +117,6 @@ def repolist() -> None:
     """
     List all configured repositories.
     """
-    _ensure_initialized()
     rows = db.list_repos()
     if not rows:
         print("No repositories configured.")
@@ -136,7 +131,6 @@ def reposync(names: List[str], all_: bool) -> None:
     Sync specified repository names, or all if --all.
     CLI: names (list) and all_ boolean
     """
-    _ensure_initialized()
     if all_:
         repos = db.list_repos()
     else:
@@ -170,7 +164,6 @@ def repodel(names: List[str], all_: bool, force: bool) -> None:
     """
     Delete repositories.
     """
-    _ensure_initialized()
     if all_:
         repos = db.list_repos()
         for r in repos:
@@ -198,25 +191,19 @@ def repodel(names: List[str], all_: bool, force: bool) -> None:
 # -------------------------
 # Package queries
 # -------------------------
+# -------------------------
+# Package Queries
+# -------------------------
 def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = False) -> None:
     """
-    Search for packages matching any of the patterns in name or summary fields.
+    Search for packages by patterns.
 
-    Prints grouped results:
-    - Name & Summary matched
-    - Summary-only matched
-    - Name-only matched
-
-    Matches are highlighted. Results follow DNF-style NEVRA : summary printout.
+    - If showduplicates is False, only the latest NEVRA per package name is shown.
+    - Results grouped by match type: Name&Summary, Summary-only, Name-only.
+    - Matches highlighted in name and summary.
+    - Prints <NEVRA> : <summary> lines.
     """
-
-    from . import operations
-
-    db = operations.db
-    if db is None:
-        raise RuntimeError("Database not initialized")
-
-    repoids = operations._resolve_repo_names_to_ids(repo) if repo else None
+    repoids = _resolve_repo_names_to_ids(repo) if repo else None
 
     all_results: List[Dict[str, Any]] = []
     for pat in patterns:
@@ -227,27 +214,28 @@ def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = F
         print("No packages found.")
         return
 
-    # Deduplicate by NEVRA components
-    dedup: Dict[str, Dict[str, Any]] = {}
-    for r in all_results:
-        nevra_obj = NEVRA.from_row(r)
-        key = f"{nevra_obj.name}|{nevra_obj.epoch}|{nevra_obj.version}|{nevra_obj.release}|{nevra_obj.arch}"
-        if not showduplicates:
-            if key in dedup:
-                continue
-        dedup[key] = r
-
-    results = list(dedup.values())
+    if not showduplicates:
+        # Keep only latest NEVRA per name
+        latest_per_name: Dict[str, Dict[str, Any]] = {}
+        for r in all_results:
+            name = r.get("name", "")
+            current = latest_per_name.get(name)
+            if not current:
+                latest_per_name[name] = r
+            else:
+                if NEVRA.from_row(r) > NEVRA.from_row(current):
+                    latest_per_name[name] = r
+        results = list(latest_per_name.values())
+    else:
+        results = all_results
 
     for pat in patterns:
-        name_summary = []
-        name_only = []
-        summary_only = []
+        name_summary, summary_only, name_only = [], [], []
 
+        pat_lower = pat.lower()
         for r in results:
             name = r.get("name", "")
-            summary = r.get("summary", "")
-            pat_lower = pat.lower()
+            summary = r.get("summary", "") or ""
 
             matched_in_name = pat_lower in name.lower()
             matched_in_summary = pat_lower in summary.lower()
@@ -255,19 +243,12 @@ def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = F
             nevra_obj = NEVRA.from_row(r)
             nevra_str = str(nevra_obj)
 
-            displayed_name = name
-            displayed_summary = summary
-            if matched_in_name:
-                displayed_name = highlight_match(displayed_name, pat)
-            if matched_in_summary:
-                displayed_summary = highlight_match(displayed_summary, pat)
+            display_name = highlight_match(name, pat) if matched_in_name else name
+            display_summary = highlight_match(summary, pat) if matched_in_summary else summary
 
-            # Include highlighted name in the output line (replace nevra name with highlighted name)
-            # If you want to maintain the NEVRA canonical format, replace only the name part:
-            nevra_parts = nevra_str.split("-", 1)
-            nevra_str_highlighted = f"{displayed_name}-{nevra_parts[1]}" if len(nevra_parts) > 1 else displayed_name
+            nevra_str_highlighted = highlight_name_in_nevra(nevra_str, name, pat) if matched_in_name else nevra_str
 
-            output_line = f"{nevra_str_highlighted} : {displayed_summary}"
+            output_line = f"{nevra_str_highlighted} : {display_summary}"
 
             if matched_in_name and matched_in_summary:
                 name_summary.append(output_line)
@@ -280,15 +261,13 @@ def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = F
             print_delimiter(f"Name & Summary Matched: {pat}")
             for line in name_summary:
                 print(line)
-
-        if name_only:
-            print_delimiter(f"Name Matched: {pat}")
-            for line in name_only:
-                print(line)
-
         if summary_only:
             print_delimiter(f"Summary Matched: {pat}")
             for line in summary_only:
+                print(line)
+        if name_only:
+            print_delimiter(f"Name Matched: {pat}")
+            for line in name_only:
                 print(line)
 
 
@@ -296,7 +275,6 @@ def info(pattern: str, repo: Optional[List[str]]) -> None:
     """
     Show detailed info for a package matching pattern (NEVRA or name).
     """
-    _ensure_initialized()
     repo_ids = _resolve_repo_names_to_ids(repo)
     rows = db.search_packages(pattern, repo_filter=repo_ids)
     if not rows:
@@ -349,7 +327,6 @@ def resolve(
     Resolve packages to concrete pkgKey set using a heuristic.
     Prints the list of NEVRAs resolved.
     """
-    _ensure_initialized()
     repo_ids = _resolve_repo_names_to_ids(repo)
     provides = db.provides_map()
     requires = db.requires_map()
@@ -455,7 +432,6 @@ def download(
     - urls: print URLs only
     - arch: architecture filter
     """
-    _ensure_initialized()
     repo_ids = _resolve_repo_names_to_ids(repo)
 
     # resolve to concrete pkgKeys
