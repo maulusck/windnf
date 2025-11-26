@@ -135,14 +135,6 @@ class MetadataManager:
             except Exception:
                 pass
 
-        # ----------------------------------------------------
-        # Optional: link binary → SRPM
-        # ----------------------------------------------------
-        try:
-            self._link_binaries_to_srpm(repo_id)
-        except Exception:
-            _logger.exception("linking binaries to SRPM failed for repo_id %s", repo_id)
-
         _logger.info("Sync complete.")
 
     # --------------------------------------------------------
@@ -212,32 +204,3 @@ class MetadataManager:
             f.write(data)
 
         return tmp.name
-
-    # --------------------------------------------------------
-    # SRPM linking
-    # --------------------------------------------------------
-
-    def _link_binaries_to_srpm(self, repo_id: int) -> None:
-        src_repo = self.db.get_source_repo(repo_id)
-        if not src_repo:
-            _logger.debug("No source repo linked for repo_id %s", repo_id)
-            return
-
-        cur = self.db.conn.execute("SELECT pkgKey, name, rpm_sourcerpm FROM packages WHERE repo_id=?", (repo_id,))
-
-        for row in cur.fetchall():
-            pkgKey = row["pkgKey"]
-            sourcerpm = row["rpm_sourcerpm"]
-            if not sourcerpm:
-                continue
-
-            # try find matching SRPM in linked source repo
-            s = self.db.conn.execute(
-                "SELECT pkgKey FROM packages " "WHERE repo_id=? AND name=? AND arch IN ('src','nosrc') LIMIT 1",
-                (src_repo["id"], sourcerpm),
-            ).fetchone()
-
-            if s:
-                _logger.debug("Linked binary pkgKey=%s → SRPM pkgKey=%s", pkgKey, s["pkgKey"])
-            else:
-                _logger.debug("No SRPM match for %s in %s", sourcerpm, src_repo["name"])
