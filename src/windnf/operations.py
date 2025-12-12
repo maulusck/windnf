@@ -191,71 +191,68 @@ def repodel(names: List[str], all_: bool, force: bool) -> None:
 # -------------------------
 # Package queries
 # -------------------------
-# -------------------------
-# Package Queries
-# -------------------------
 def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = False) -> None:
     """
     Search for packages by patterns.
 
     - If showduplicates is False, only the latest NEVRA per package name is shown.
     - Results grouped by match type: Name&Summary, Summary-only, Name-only.
-    - Matches highlighted in name and summary.
     - Prints <NEVRA> : <summary> lines.
     """
     repoids = _resolve_repo_names_to_ids(repo) if repo else None
 
     all_results: List[Dict[str, Any]] = []
     for pat in patterns:
-        rows = db.search_packages(pat, repo_filter=repoids)
-        all_results.extend(rows)
+        all_results.extend(db.search_packages(pat, repo_filter=repoids))
 
     if not all_results:
         print("No packages found.")
         return
 
     if not showduplicates:
-        # Keep only latest NEVRA per name
         latest_per_name: Dict[str, Dict[str, Any]] = {}
         for r in all_results:
-            name = r.get("name", "")
-            current = latest_per_name.get(name)
-            if not current:
-                latest_per_name[name] = r
-            else:
-                if NEVRA.from_row(r) > NEVRA.from_row(current):
-                    latest_per_name[name] = r
+            n = r["name"]
+            cur = latest_per_name.get(n)
+            if not cur or NEVRA.from_row(r) > NEVRA.from_row(cur):
+                latest_per_name[n] = r
         results = list(latest_per_name.values())
     else:
         results = all_results
 
     for pat in patterns:
+        # make matching consistent with wildcard-search behavior
+        needle = pat.replace("*", "").lower()
+
         name_summary, summary_only, name_only = [], [], []
 
-        pat_lower = pat.lower()
         for r in results:
-            name = r.get("name", "")
+            name = r.get("name", "") or ""
             summary = r.get("summary", "") or ""
 
-            matched_in_name = pat_lower in name.lower()
-            matched_in_summary = pat_lower in summary.lower()
+            nl = name.lower()
+            sl = summary.lower()
+
+            match_name = needle in nl if needle else False
+            match_summary = needle in sl if needle else False
+
+            if not (match_name or match_summary):
+                continue
 
             nevra_obj = NEVRA.from_row(r)
             nevra_str = str(nevra_obj)
 
-            display_name = highlight_match(name, pat) if matched_in_name else name
-            display_summary = highlight_match(summary, pat) if matched_in_summary else summary
+            disp_summary = highlight_match(summary, pat.replace("*", "")) if match_summary else summary
+            nevra_disp = highlight_name_in_nevra(nevra_str, name, pat.replace("*", "")) if match_name else nevra_str
 
-            nevra_str_highlighted = highlight_name_in_nevra(nevra_str, name, pat) if matched_in_name else nevra_str
+            line = f"{nevra_disp} : {disp_summary}"
 
-            output_line = f"{nevra_str_highlighted} : {display_summary}"
-
-            if matched_in_name and matched_in_summary:
-                name_summary.append(output_line)
-            elif matched_in_summary:
-                summary_only.append(output_line)
-            elif matched_in_name:
-                name_only.append(output_line)
+            if match_name and match_summary:
+                name_summary.append(line)
+            elif match_summary:
+                summary_only.append(line)
+            elif match_name:
+                name_only.append(line)
 
         if name_summary:
             print_delimiter(f"Name & Summary Matched: {pat}")

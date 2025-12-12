@@ -349,52 +349,60 @@ class DbManager:
         return dict(r) if r else None
 
     def search_packages(self, pattern: str, repo_filter: Optional[Sequence[int]] = None) -> List[Dict[str, Any]]:
-        """
-        Search packages by substring matching like DNF:
-        - Search in package name and summary with case-insensitive substring match.
-        - Support NEVRA-string parsing for exact matching on name, epoch, version, release, arch.
-        - Repo filtering supported.
-        """
-
         self._print_repo_info(repo_filter)
 
+        # Detect whether pattern contains wildcards
+        has_star = "*" in pattern
+
+        # Prepare NEVRA parsing only if no wildcards
         try:
-            nv = NEVRA.parse(pattern)
+            nv = NEVRA.parse(pattern) if not has_star else None
         except Exception:
             nv = None
 
-        params: List[Any] = []
-        where_clauses: List[str] = []
+        params = []
+        where = []
 
+        # Repo filter
         if repo_filter:
-            where_clauses.append("repo_id IN ({})".format(",".join("?" for _ in repo_filter)))
+            where.append(f"repo_id IN ({','.join('?' for _ in repo_filter)})")
             params.extend(repo_filter)
 
         if nv:
-            # Exact matches on NEVRA fields
-            where_clauses.append("name = ?")
+            # Exact match using NEVRA
+            where.append("name = ?")
             params.append(nv.name)
+
             if nv.epoch is not None:
-                where_clauses.append("epoch = ?")
+                where.append("epoch = ?")
                 params.append(nv.epoch)
+
             if nv.version is not None:
-                where_clauses.append("version = ?")
+                where.append("version = ?")
                 params.append(nv.version)
+
             if nv.release is not None:
-                where_clauses.append("release = ?")
+                where.append("release = ?")
                 params.append(nv.release)
+
             if nv.arch is not None:
-                where_clauses.append("arch = ?")
+                where.append("arch = ?")
                 params.append(nv.arch)
+
         else:
-            # Substring match on name OR summary with case-insensitive LIKE
-            substr_pattern = f"%{pattern}%"
-            where_clauses.append("(LOWER(name) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))")
-            params.extend([substr_pattern, substr_pattern])
+            # Convert shell-style * to SQL %
+            sql_pattern = pattern.replace("*", "%")
+
+            # If no wildcards were used, wrap implicitly as substring search
+            if not has_star:
+                sql_pattern = f"%{pattern}%"
+
+            where.append("(LOWER(name) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))")
+            params.extend([sql_pattern, sql_pattern])
 
         query = "SELECT * FROM packages"
-        if where_clauses:
-            query += " WHERE " + " AND ".join(where_clauses)
+        if where:
+            query += " WHERE " + " AND ".join(where)
 
         rows = self.conn.execute(query, tuple(params)).fetchall()
         return [dict(row) for row in rows]
