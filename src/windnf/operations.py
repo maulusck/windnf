@@ -196,18 +196,12 @@ def repodel(names: List[str] = None, all_: bool = False, force: bool = False) ->
 
 
 def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = False) -> None:
-    """
-    Search for packages by patterns.
-
-    - If showduplicates is False, only the latest NEVRA per package name is shown.
-    - Results grouped by match type: Name & Summary, Summary-only, Name-only.
-    - Highlights only when pattern has no wildcard (*).
-    """
     repoids = _resolve_repo_names_to_ids(repo) if repo else None
-
     all_results: List[Dict[str, Any]] = []
+
     for pat in patterns:
-        all_results.extend(db.search_packages(pat, repo_filter=repoids))
+        # Fuzzy search: default exact=False
+        all_results.extend(db.search_packages(pat, repo_filter=repoids, exact=False))
 
     if not all_results:
         print("No packages found.")
@@ -242,11 +236,9 @@ def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = F
             name_lc, summary_lc = r["_name_lc"], r["_summary_lc"]
 
             if is_wildcard:
-                # Wildcard match
                 match_name = fnmatch.fnmatchcase(name_lc, pat_lc)
                 match_summary = fnmatch.fnmatchcase(summary_lc, pat_lc)
             else:
-                # Simple substring match (case-insensitive)
                 match_name = pat_lc in name_lc
                 match_summary = pat_lc in summary_lc
 
@@ -254,8 +246,6 @@ def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = F
                 continue
 
             nevra_str = str(r["_nevra"])
-
-            # Only highlight for non-wildcard patterns
             disp_summary = highlight_match(summary, pat) if match_summary and not is_wildcard else summary
             nevra_disp = highlight_name_in_nevra(nevra_str, name, pat) if match_name and not is_wildcard else nevra_str
 
@@ -283,26 +273,24 @@ def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = F
 
 
 def info(pattern: str, repo: Optional[List[str]]) -> None:
-    """
-    Show detailed info for a package matching pattern (NEVRA or name).
-    """
     repo_ids = _resolve_repo_names_to_ids(repo)
-    rows = db.search_packages(pattern, repo_filter=repo_ids)
+    # Exact search for NEVRA or name
+    rows = db.search_packages(pattern, repo_filter=repo_ids, exact=True)
     if not rows:
         print("No packages match.")
         return
 
-    # If multiple matches, choose the newest per NEVRA ordering
+    # Pick the newest per NEVRA ordering
     best = max(rows, key=lambda row: NEVRA.from_row(row))
     row = best
     nevra = NEVRA.from_row(row)
+
     print(f"Package: {nevra}")
     print(f" Repo: {row.get('repo_id')}")
     print(f" Arch: {row.get('arch')}")
     print(f" Summary: {row.get('summary')}")
     print(f" URL: {row.get('url') or ''}")
 
-    # fetch provides/requires
     provs = [
         dict(x)
         for x in db.conn.execute(

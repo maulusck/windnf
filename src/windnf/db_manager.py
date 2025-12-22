@@ -359,20 +359,13 @@ class DbManager:
         self,
         pattern: str,
         repo_filter: Optional[Sequence[int]] = None,
+        exact: bool = False,  # True = exact match, False = fuzzy/wildcard
     ) -> List[Dict[str, Any]]:
         self._print_repo_info(repo_filter)
 
-        def to_sql_like(user_pattern: str) -> str:
-            # Convert shell-style "*" to SQL "%".
-            if "*" in user_pattern:
-                return user_pattern.replace("*", "%")
-            # No wildcard supplied → implicit substring search.
-            return f"%{user_pattern}%"
-
-        has_star = "*" in pattern
-
+        # Try NEVRA parsing only if not forcing exact name match
         nv = None
-        if not has_star:
+        if not exact:
             try:
                 nv = NEVRA.parse(pattern)
             except Exception:
@@ -381,36 +374,36 @@ class DbManager:
         params: List[Any] = []
         where: List[str] = []
 
-        # Optional repo filter
         if repo_filter:
             where.append(f"repo_id IN ({','.join('?' for _ in repo_filter)})")
             params.extend(repo_filter)
 
         if nv is not None:
-            # Exact NEVRA match
+            # Full NEVRA match
             where.append("name = ?")
             params.append(nv.name)
-
             if nv.epoch is not None:
                 where.append("epoch = ?")
                 params.append(nv.epoch)
-
             if nv.version is not None:
                 where.append("version = ?")
                 params.append(nv.version)
-
             if nv.release is not None:
                 where.append("release = ?")
                 params.append(nv.release)
-
             if nv.arch is not None:
                 where.append("arch = ?")
                 params.append(nv.arch)
         else:
-            sql_pattern = to_sql_like(pattern)
-
-            where.append("(" "LOWER(name) LIKE LOWER(?) OR " "LOWER(summary) LIKE LOWER(?)" ")")
-            params.extend([sql_pattern, sql_pattern])
+            if exact:
+                # Exact name-only match
+                where.append("name = ?")
+                params.append(pattern)
+            else:
+                # Wildcards + substring search
+                sql_pattern = pattern.replace("*", "%") if "*" in pattern else f"%{pattern}%"
+                where.append("(LOWER(name) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))")
+                params.extend([sql_pattern, sql_pattern])
 
         query = "SELECT * FROM packages"
         if where:
