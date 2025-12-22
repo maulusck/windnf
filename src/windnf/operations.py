@@ -191,13 +191,17 @@ def repodel(names: List[str], all_: bool, force: bool) -> None:
 # -------------------------
 # Package queries
 # -------------------------
+import fnmatch
+from typing import Any, Dict, List
+
+
 def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = False) -> None:
     """
     Search for packages by patterns.
 
     - If showduplicates is False, only the latest NEVRA per package name is shown.
-    - Results grouped by match type: Name&Summary, Summary-only, Name-only.
-    - Prints <NEVRA> : <summary> lines.
+    - Results grouped by match type: Name & Summary, Summary-only, Name-only.
+    - Highlights only when pattern has no wildcard (*).
     """
     repoids = _resolve_repo_names_to_ids(repo) if repo else None
 
@@ -209,6 +213,7 @@ def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = F
         print("No packages found.")
         return
 
+    # Keep only latest per package name if duplicates not desired
     if not showduplicates:
         latest_per_name: Dict[str, Dict[str, Any]] = {}
         for r in all_results:
@@ -220,30 +225,39 @@ def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = F
     else:
         results = all_results
 
-    for pat in patterns:
-        # make matching consistent with wildcard-search behavior
-        needle = pat.replace("*", "").lower()
+    # Precompute lowercase and NEVRA objects
+    for r in results:
+        r["_name_lc"] = r.get("name", "").lower()
+        r["_summary_lc"] = r.get("summary", "").lower()
+        r["_nevra"] = NEVRA.from_row(r)
 
+    for pat in patterns:
         name_summary, summary_only, name_only = [], [], []
 
+        pat_lc = pat.lower()
+        is_wildcard = "*" in pat
+
         for r in results:
-            name = r.get("name", "") or ""
-            summary = r.get("summary", "") or ""
+            name, summary = r.get("name", ""), r.get("summary", "")
+            name_lc, summary_lc = r["_name_lc"], r["_summary_lc"]
 
-            nl = name.lower()
-            sl = summary.lower()
-
-            match_name = needle in nl if needle else False
-            match_summary = needle in sl if needle else False
+            if is_wildcard:
+                # Wildcard match
+                match_name = fnmatch.fnmatchcase(name_lc, pat_lc)
+                match_summary = fnmatch.fnmatchcase(summary_lc, pat_lc)
+            else:
+                # Simple substring match (case-insensitive)
+                match_name = pat_lc in name_lc
+                match_summary = pat_lc in summary_lc
 
             if not (match_name or match_summary):
                 continue
 
-            nevra_obj = NEVRA.from_row(r)
-            nevra_str = str(nevra_obj)
+            nevra_str = str(r["_nevra"])
 
-            disp_summary = highlight_match(summary, pat.replace("*", "")) if match_summary else summary
-            nevra_disp = highlight_name_in_nevra(nevra_str, name, pat.replace("*", "")) if match_name else nevra_str
+            # Only highlight for non-wildcard patterns
+            disp_summary = highlight_match(summary, pat) if match_summary and not is_wildcard else summary
+            nevra_disp = highlight_name_in_nevra(nevra_str, name, pat) if match_name and not is_wildcard else nevra_str
 
             line = f"{nevra_disp} : {disp_summary}"
 

@@ -348,28 +348,39 @@ class DbManager:
         r = self.conn.execute("SELECT * FROM packages WHERE pkgKey=?", (pkgKey,)).fetchone()
         return dict(r) if r else None
 
-    def search_packages(self, pattern: str, repo_filter: Optional[Sequence[int]] = None) -> List[Dict[str, Any]]:
+    def search_packages(
+        self,
+        pattern: str,
+        repo_filter: Optional[Sequence[int]] = None,
+    ) -> List[Dict[str, Any]]:
         self._print_repo_info(repo_filter)
 
-        # Detect whether pattern contains wildcards
+        def to_sql_like(user_pattern: str) -> str:
+            # Convert shell-style "*" to SQL "%".
+            if "*" in user_pattern:
+                return user_pattern.replace("*", "%")
+            # No wildcard supplied → implicit substring search.
+            return f"%{user_pattern}%"
+
         has_star = "*" in pattern
 
-        # Prepare NEVRA parsing only if no wildcards
-        try:
-            nv = NEVRA.parse(pattern) if not has_star else None
-        except Exception:
-            nv = None
+        nv = None
+        if not has_star:
+            try:
+                nv = NEVRA.parse(pattern)
+            except Exception:
+                nv = None
 
-        params = []
-        where = []
+        params: List[Any] = []
+        where: List[str] = []
 
-        # Repo filter
+        # Optional repo filter
         if repo_filter:
             where.append(f"repo_id IN ({','.join('?' for _ in repo_filter)})")
             params.extend(repo_filter)
 
-        if nv:
-            # Exact match using NEVRA
+        if nv is not None:
+            # Exact NEVRA match
             where.append("name = ?")
             params.append(nv.name)
 
@@ -388,16 +399,10 @@ class DbManager:
             if nv.arch is not None:
                 where.append("arch = ?")
                 params.append(nv.arch)
-
         else:
-            # Convert shell-style * to SQL %
-            sql_pattern = pattern.replace("*", "%")
+            sql_pattern = to_sql_like(pattern)
 
-            # If no wildcards were used, wrap implicitly as substring search
-            if not has_star:
-                sql_pattern = f"%{pattern}%"
-
-            where.append("(LOWER(name) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))")
+            where.append("(" "LOWER(name) LIKE LOWER(?) OR " "LOWER(summary) LIKE LOWER(?)" ")")
             params.extend([sql_pattern, sql_pattern])
 
         query = "SELECT * FROM packages"
