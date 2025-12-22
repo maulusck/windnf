@@ -1,6 +1,7 @@
 # operations.py
 from __future__ import annotations
 
+import fnmatch
 import re
 import shutil
 from pathlib import Path
@@ -192,8 +193,6 @@ def repodel(names: List[str] = None, all_: bool = False, force: bool = False) ->
 # -------------------------
 # Package queries
 # -------------------------
-import fnmatch
-from typing import Any, Dict, List
 
 
 def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = False) -> None:
