@@ -92,12 +92,19 @@ class DbManager:
         rows = self.conn.execute("SELECT * FROM repositories ORDER BY name").fetchall()
         return [dict(r) for r in rows]
 
-    def get_repo(self, name: Union[str, int]) -> Optional[Dict[str, Any]]:
-        if isinstance(name, int):
-            r = self.conn.execute("SELECT * FROM repositories WHERE id=?", (name,)).fetchone()
-        else:
-            r = self.conn.execute("SELECT * FROM repositories WHERE name=?", (name,)).fetchone()
-        return dict(r) if r else None
+    def get_repo(self, identifier):
+        """
+        Retrieve a repository by name or ID.
+        Accepts int, numeric string, or regular string.
+        """
+        try:
+            identifier = int(identifier)
+            query = "SELECT * FROM repositories WHERE id=?"
+        except ValueError:
+            query = "SELECT * FROM repositories WHERE name=?"
+
+        row = self.conn.execute(query, (identifier,)).fetchone()
+        return dict(row) if row else None
 
     def delete_repo(self, name_or_id: Union[str, int]) -> bool:
         if isinstance(name_or_id, int):

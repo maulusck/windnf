@@ -160,32 +160,33 @@ def reposync(names: List[str], all_: bool) -> None:
             print(f"Synced {r['name']}")
 
 
-def repodel(names: List[str], all_: bool, force: bool) -> None:
+def repodel(names: List[str] = None, all_: bool = False, force: bool = False) -> None:
     """
-    Delete repositories.
+    Delete repositories by name or ID.
     """
+    names = names or []
+
     if all_:
-        repos = db.list_repos()
-        for r in repos:
-            db.delete_repo(r["id"])
-            print(f"Deleted {r['name']}")
+        for repo in db.list_repos():
+            if force or input(f"Delete {repo['name']}? [y/N]: ").lower() == "y":
+                db.delete_repo(repo["id"])
+                print(f"Deleted {repo['name']}")
         return
 
     if not names:
-        print("No repository names provided.")
+        print("No repository names or IDs provided.")
         return
 
-    for n in names:
-        r = db.get_repo(n)
-        if not r:
-            if force:
-                print(f"Repository {n} not found; skipping (force).")
-                continue
-            else:
-                print(f"Repository {n} not found.")
-                continue
-        db.delete_repo(r["id"])
-        print(f"Deleted repository {n}")
+    for identifier in names:
+        repo = db.get_repo(identifier)
+        print(repo)
+        if not repo:
+            print(f"Repository {identifier} not found.")
+            continue
+
+        if force or input(f"Delete repository {repo['name']}? [y/N]: ").lower() == "y":
+            db.delete_repo(repo["id"])
+            print(f"Deleted repository {repo['name']}")
 
 
 # -------------------------
