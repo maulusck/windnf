@@ -1,10 +1,19 @@
-# cli.py
 import argparse
 import sys
-from pathlib import Path
+import logging
+
+# Automatically patch requests to use Windows System Certificate Store
+# This prevents SSL errors behind Corporate Proxies/Firewalls.
+try:
+    import pip_system_certs.wrappers
+    pip_system_certs.wrappers.wrap_requests()
+except ImportError:
+    pass
+# ----------------------
 
 from . import operations
 from .config import Config
+from .logger import setup_logger
 
 
 def main():

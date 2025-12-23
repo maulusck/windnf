@@ -6,16 +6,24 @@ build-backend = "setuptools.build_meta"
 name = "windnf"
 description = "Windows RPM Package Metadata Calculator Tool"
 authors = [{ name = "Maulusck✖Perplexity", email = "maulusck@pm.me" }]
-license = "WTFPL"
-license-files = ["LICENSE"]
+license = { text = "WTFPL" }
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
+    "Topic :: System :: Software Distribution",
+    "Development Status :: 4 - Beta"
 ]
-dependencies = ["requests", "PyYAML", "tqdm", "urllib3"]
+dependencies = [
+    "requests",
+    "requests-negotiate-sspi; sys_platform == 'win32'", 
+    "pip-system-certs; sys_platform == 'win32'",
+    "PyYAML", 
+    "tqdm", 
+    "urllib3"
+]
 dynamic = ["version"]
 
 [project.urls]
@@ -25,7 +33,7 @@ Home-page = "https://github.com/maulusck/windnf"
 windnf = "windnf.cli:main"
 
 [tool.setuptools_scm]
-# optionally configure setuptools_scm here
+write_to = "src/windnf/_version.py"
 
 [tool.black]
 line-length = 120
