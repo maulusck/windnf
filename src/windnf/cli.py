@@ -98,7 +98,7 @@ def main():
     p_download.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
     p_download.add_argument("--downloaddir", "-x", type=str)
     p_download.add_argument("--destdir", type=str)
-    p_download.add_argument("--resolve", action="store_true")
+    p_download.add_argument("--resolve", action="store_true", dest="resolve_flag")
     p_download.add_argument("--recurse", "-R", action="store_true")
     p_download.add_argument("--source", "-S", action="store_true")
     p_download.add_argument("--urls", "--url", action="store_true")
