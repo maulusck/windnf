@@ -351,6 +351,17 @@ class DbManager:
             out.setdefault(r["pkgKey"], []).append(dict(r))
         return out
 
+    def files_map(self) -> dict[int, list[str]]:
+        """
+        Return a mapping of pkgKey -> list of filenames in that package.
+        Example: { 123: ['usr/bin/foo', 'usr/lib/bar'], 124: [...] }
+        """
+        out = {}
+        rows = self.conn.execute("SELECT pkgKey, name FROM files").fetchall()
+        for row in rows:
+            out.setdefault(row["pkgKey"], []).append(row["name"])
+        return out
+
     def get_by_key(self, pkgKey: int) -> Optional[Dict[str, Any]]:
         r = self.conn.execute("SELECT * FROM packages WHERE pkgKey=?", (pkgKey,)).fetchone()
         return dict(r) if r else None

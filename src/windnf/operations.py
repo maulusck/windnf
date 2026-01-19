@@ -286,138 +286,112 @@ def search(patterns: List[str], repo: List[str] = None, showduplicates: bool = F
                 print(line)
 
 
-def info(pattern: str, repo: Optional[List[str]]) -> None:
-    repo_ids = _resolve_repo_names_to_ids(repo)
-    # Exact search for NEVRA or name
+def info(pattern: str, repo: Optional[List[str]] = None) -> None:
+    """
+    Show info about the newest matching package(s) for `pattern`.
+    Only prints NEVRA info, repo, arch, summary, and URL.
+    """
+    repo_ids = _resolve_repo_names_to_ids(repo) if repo else None
+
     rows = db.search_packages(pattern, repo_filter=repo_ids, exact=True)
     if not rows:
         print("No packages match.")
         return
 
-    # Pick the newest per NEVRA ordering
-    best = max(rows, key=lambda row: NEVRA.from_row(row))
-    row = best
-    nevra = NEVRA.from_row(row)
+    best_row = max(rows, key=lambda row: NEVRA.from_row(row))
+    nevra = NEVRA.from_row(best_row)
 
     print(f"Package: {nevra}")
-    print(f" Repo: {row.get('repo_id')}")
-    print(f" Arch: {row.get('arch')}")
-    print(f" Summary: {row.get('summary')}")
-    print(f" URL: {row.get('url') or ''}")
-
-    provs = [
-        dict(x)
-        for x in db.conn.execute(
-            "SELECT name,flags,epoch,version,release FROM provides WHERE pkgKey=?", (row["pkgKey"],)
-        ).fetchall()
-    ]
-    reqs = [
-        dict(x)
-        for x in db.conn.execute(
-            "SELECT name,flags,epoch,version,release,pre FROM requires WHERE pkgKey=?", (row["pkgKey"],)
-        ).fetchall()
-    ]
-
-    if provs:
-        print(" Provides:")
-        for p in provs:
-            print(f"  - {p['name']}")
-
-    if reqs:
-        print(" Requires:")
-        for r in reqs:
-            pre = " (pre)" if r.get("pre") else ""
-            print(f"  - {r['name']}{pre}")
+    repo_name = db.get_repo(best_row["repo_id"])["name"] if best_row.get("repo_id") else best_row.get("repo_id")
+    print(f" Repo: {repo_name}")
+    print(f" Arch: {best_row.get('arch')}")
+    print(f" Summary: {best_row.get('summary')}")
+    print(f" URL: {best_row.get('url') or ''}")
 
 
 # -------------------------
-# Resolver (heuristic)
+# Resolver
 # -------------------------
 def resolve(
-    packages: List[str], repo: Optional[List[str]], weakdeps: bool, recursive: bool, arch: Optional[str]
+    packages: List[str],
+    repo: Optional[List[str]] = None,
+    weakdeps: bool = False,
+    recursive: bool = False,
+    arch: Optional[str] = None,
+    verbose: bool = False,
 ) -> None:
     """
-    Resolve packages to concrete pkgKey set using a heuristic.
-    Prints the list of NEVRAs resolved.
+    Resolve packages and their dependencies.
+
+    packages: list of package names/patterns
+    repo: optional list of repos to filter
+    weakdeps: whether to include weak dependencies (not implemented)
+    recursive: whether to recursively resolve dependencies
+    arch: optional architecture filter
+    verbose: if True, print full info map; otherwise, just package names
     """
-    repo_ids = _resolve_repo_names_to_ids(repo)
-    provides = db.provides_map()
-    requires = db.requires_map()
+    repo_ids = _resolve_repo_names_to_ids(repo) if repo else None
 
-    # helper to choose best candidate for a requirement dict
-    def choose_candidate(req: Dict[str, Any]):
-        name = req["name"]
-        candidates = list(provides.get(name, []))
-        if not candidates:
-            return None
-        # apply repo and arch filters
-        if repo_ids is not None:
-            candidates = [pk for pk in candidates if db.get_by_key(pk)["repo_id"] in repo_ids]
-        if arch is not None:
-            candidates = [pk for pk in candidates if db.get_by_key(pk)["arch"] == arch]
-        if not candidates:
-            return None
-        # prefer exact epoch/version/release if specified
-        for pk in candidates:
-            prow = db.get_by_key(pk)
-            if req.get("epoch") and str(prow.get("epoch") or "0") != str(req.get("epoch")):
-                continue
-            if req.get("version") and prow.get("version") != req.get("version"):
-                continue
-            if req.get("release") and prow.get("release") != req.get("release"):
-                continue
-            return pk
-        # otherwise pick highest NEVRA
-        best = max(candidates, key=lambda k: NEVRA.from_row(db.get_by_key(k)))
-        return best
-
-    # build initial queue from provided package patterns
-    queue: List[int] = []
-    for p in packages:
-        try:
-            nv = NEVRA.parse(p)
-        except Exception:
-            nv = None
-        if nv:
-            # try exact lookup
-            rows = db.search_packages(str(nv))
-            if rows:
-                queue.append(rows[0]["pkgKey"])
-                continue
-            # fallback newest by name
-            rows = db.search_packages(nv.name, repo_filter=repo_ids)
-            if rows:
-                best = max(rows, key=lambda r: NEVRA.from_row(r))
-                queue.append(best["pkgKey"])
-                continue
-        else:
-            # treat as name
-            rows = db.search_packages(p, repo_filter=repo_ids)
-            if rows:
-                best = max(rows, key=lambda r: NEVRA.from_row(r))
-                queue.append(best["pkgKey"])
-
-    resolved = set()
-    while queue:
-        pk = queue.pop(0)
-        if pk in resolved:
+    # Step 1: Find the newest package matching each pattern
+    to_resolve: List[Dict[str, Any]] = []
+    for pat in packages:
+        rows = db.search_packages(pat, repo_filter=repo_ids, exact=True)
+        if not rows:
+            print(f"No package found matching '{pat}'")
             continue
-        resolved.add(pk)
-        if not recursive:
-            continue
-        reqs = requires.get(pk, [])
-        for req in reqs:
-            if not weakdeps and req.get("flags") == "weak":
-                continue
-            cand = choose_candidate(req)
-            if cand and cand not in resolved:
-                queue.append(cand)
+        best_row = max(rows, key=lambda r: NEVRA.from_row(r))
+        to_resolve.append(best_row)
 
-    # print resolved NEVRAs
-    out = [NEVRA.from_row(db.get_by_key(pk)) for pk in resolved]
-    print("Resolved:")
-    for n in out:
-        print(f"  {n}")
+    if not to_resolve:
+        print("No packages to resolve.")
+        return
+
+    # Step 2: Load maps
+    provides_map = db.provides_map()  # {provide_name: set(pkgKeys)}
+    requires_map = db.requires_map()  # {pkgKey: list of requirements}
+
+    resolved_keys: Set[int] = set()
+    stack: List[Dict[str, Any]] = list(to_resolve)
+
+    while stack:
+        pkg_row = stack.pop()
+        pkgKey = pkg_row["pkgKey"]
+        if pkgKey in resolved_keys:
+            continue
+        resolved_keys.add(pkgKey)
+
+        # Use info() to print package details if verbose
+        if verbose:
+            info(pkg_row["name"], repo)
+
+        # Step 3: Resolve requirements
+        reqs = requires_map.get(pkgKey, [])
+        if reqs:
+            for r in reqs:
+                req_name = r["name"]
+                provider_keys = provides_map.get(req_name, set())
+                if provider_keys:
+                    for pKey in provider_keys:
+                        prov_row = db.get_by_key(pKey)
+                        if not prov_row:
+                            continue
+                        prov_nevra = NEVRA.from_row(prov_row)
+                        if verbose:
+                            print(f"  - Requirement '{req_name}' provided by {prov_nevra}")
+                        else:
+                            print(f"  - {prov_nevra}")
+                        if recursive and pKey not in resolved_keys:
+                            stack.append(prov_row)
+                else:
+                    if verbose:
+                        print(f"  - Requirement '{req_name}' has no provider")
+                    else:
+                        print(f"  - <no provider for {req_name}>")
+        elif verbose:
+            print("  Requires: none")
+
+        if verbose:
+            print("")  # spacing between packages
 
 
 # -------------------------

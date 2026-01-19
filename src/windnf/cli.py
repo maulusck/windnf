@@ -85,6 +85,7 @@ def main():
     p_resolve.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
     p_resolve.add_argument("--weakdeps", "-w", action="store_true")
     p_resolve.add_argument("--recursive", "-R", action="store_true")
+    p_resolve.add_argument("-v", "--verbose", action="store_true", help="Show provides/requires info")
     p_resolve.add_argument("--arch")
     p_resolve.set_defaults(func=operations.resolve)
 
