@@ -339,32 +339,49 @@ class DbManager:
             return None
         return self.get_repo(int(src_id))
 
-    def provides_map(self) -> Dict[str, Set[int]]:
+    def provides_map(self, repo_filter: Optional[Sequence[int]] = None) -> Dict[str, Set[int]]:
+        """
+        Return a mapping: provide_name -> set(pkgKeys)
+        Only include packages from repos in repo_filter if provided.
+        """
         out: Dict[str, Set[int]] = {}
-        for r in self.conn.execute("SELECT name, pkgKey FROM provides"):
+        sql = "SELECT p.name, p.pkgKey, pkg.repo_id FROM provides p " "JOIN packages pkg ON p.pkgKey = pkg.pkgKey"
+        for r in self.conn.execute(sql):
+            if repo_filter and r["repo_id"] not in repo_filter:
+                continue
             out.setdefault(r["name"], set()).add(r["pkgKey"])
         return out
 
     def requires_map(self) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Return a mapping: pkgKey -> list of requirements
+        """
         out: Dict[int, List[Dict[str, Any]]] = {}
         for r in self.conn.execute("SELECT * FROM requires"):
             out.setdefault(r["pkgKey"], []).append(dict(r))
         return out
 
-    def files_map(self) -> dict[int, list[str]]:
+    def files_map(self) -> Dict[int, List[str]]:
         """
         Return a mapping of pkgKey -> list of filenames in that package.
         Example: { 123: ['usr/bin/foo', 'usr/lib/bar'], 124: [...] }
         """
-        out = {}
+        out: Dict[int, List[str]] = {}
         rows = self.conn.execute("SELECT pkgKey, name FROM files").fetchall()
         for row in rows:
             out.setdefault(row["pkgKey"], []).append(row["name"])
         return out
 
-    def get_by_key(self, pkgKey: int) -> Optional[Dict[str, Any]]:
+    def get_by_key(self, pkgKey: int, repo_filter: Optional[Sequence[int]] = None) -> Optional[Dict[str, Any]]:
+        """
+        Return the package row by pkgKey, or None if not found or filtered out by repo_filter
+        """
         r = self.conn.execute("SELECT * FROM packages WHERE pkgKey=?", (pkgKey,)).fetchone()
-        return dict(r) if r else None
+        if not r:
+            return None
+        if repo_filter and r["repo_id"] not in repo_filter:
+            return None
+        return dict(r)
 
     def search_packages(
         self,
