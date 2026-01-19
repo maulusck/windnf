@@ -30,6 +30,9 @@ def main():
     p_repoadd.add_argument("--repomd", "-m", default="repodata/repomd.xml")
     p_repoadd.add_argument("--type", "-t", dest="repo_type", choices=["binary", "source"], default="binary")
     p_repoadd.add_argument("--source-repo", "-s")
+    p_repoadd.add_argument(
+        "--sync", "-S", dest="sync", action="store_true", help="Sync the repository immediately after adding/updating"
+    )
     p_repoadd.set_defaults(func=operations.repoadd)
 
     # repolink / rlk

@@ -84,7 +84,14 @@ def print_delimiter(title: str) -> None:
 # -------------------------
 # Repository commands
 # -------------------------
-def repoadd(name: str, baseurl: str, repomd: str, repo_type: str, source_repo: Optional[str]) -> None:
+def repoadd(
+    name: str,
+    baseurl: str,
+    repomd: str,
+    repo_type: str,
+    source_repo: Optional[str],
+    sync: bool,
+) -> None:
     """
     Add (or update) repository and sync.
     CLI signature: name, baseurl, --repomd, --type, --source-repo
@@ -95,13 +102,20 @@ def repoadd(name: str, baseurl: str, repomd: str, repo_type: str, source_repo: O
         if not src:
             raise ValueError(f"Source repo not found: {source_repo}")
         src_id = int(src["id"])
-
-    rid = db.add_repo(name=name, base_url=baseurl, repomd_url=repomd, rtype=repo_type, source_repo_id=src_id)
-    print(f"Repository '{name}' added/updated (id={rid}). Starting sync...")
+    rid = db.add_repo(
+        name=name,
+        base_url=baseurl,
+        repomd_url=repomd,
+        rtype=repo_type,
+        source_repo_id=src_id,
+    )
+    print(f"Repository '{name}' added/updated (id={rid}).")
+    if not sync:
+        return
+    print("Starting sync...")
     repo_row = db.get_repo(int(rid))
     if repo_row:
         metadata.sync_repo(repo_row)
-        print("Sync complete.")
     else:
         print("Repo created but could not load repository row.")
 
