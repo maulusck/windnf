@@ -146,18 +146,20 @@ class Operations:
             repos = self.db.list_repos()
         else:
             repos = [r for n in names if (r := self.db.get_repo(n)) is not None]
+
         if not repos:
-            print("No repositories to sync.")
+            _logger.info("No repositories to sync.")
             return
+
         for r in repos:
-            print(f"Syncing {r['name']}...")
+            _logger.info(f"Syncing {r['name']}...")
             try:
                 self.metadata.sync_repo(r)
-            except Exception as e:
-                _logger.exception("Failed to sync %s: %s", r["name"], e)
-                print(f"Failed to sync {r['name']}: {e}")
+            except RuntimeError as e:
+                # concise error for console, full traceback already in sync_repo via logger
+                _logger.error(f"Failed to sync {r['name']}: {e}")
             else:
-                print(f"Synced {r['name']}")
+                _logger.info(f"Synced {r['name']}")
 
     def repodel(self, names: Optional[List[str]] = None, all_: bool = False, force: bool = False) -> None:
         names = names or []

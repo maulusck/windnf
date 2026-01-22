@@ -129,45 +129,62 @@ class Downloader:
     # -------------------------
     # powershell backend
     # -------------------------
-    def _powershell_command(self, url: str, output_path: Path) -> str:
+    def _powershell_command(self, url: str, output_path: Path, timeout: int = 60) -> str:
         return rf"""
     $ErrorActionPreference = 'Stop'
-
-    $Url = '{url}'
-    $OutFile = '{str(output_path)}'
-    $Label = '[PS] Downloading {output_path.name}'
-    $spinner = @('|','/','-','\')
-    $i = 0
-
-    # Start the download as a child process
-    $download = Start-Process powershell -ArgumentList "-Command Invoke-WebRequest -Uri `"$Url`" -OutFile `"$OutFile`"" -NoNewWindow -PassThru
-
-    # Spinner loop
-    while (-not $download.HasExited) {{
-        if (-not [Console]::IsOutputRedirected) {{
-            Write-Host -NoNewline "`r$Label $($spinner[$i % 4])"
-            Start-Sleep -Milliseconds 100
-            $i++
-        }} else {{
-            Start-Sleep -Milliseconds 100
-        }}
+    try {{
+        Invoke-WebRequest `
+            -Uri "{url}" `
+            -OutFile "{str(output_path)}" `
+            -UseBasicParsing `
+            -TimeoutSec {timeout} `
+            -ErrorAction Stop
     }}
-
-    Write-Host "`r[PS] Download complete{' ' * 10}"
+    catch {{
+        Write-Host "[PS] Download failed: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }}
     """
 
     def _download_powershell_to_file(self, url: str, output_path: Path) -> None:
-        cmd = [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            self._powershell_command(url, output_path),
-        ]
+        """
+        Downloads a file using PowerShell's Invoke-WebRequest.
+        Shows a simple Python spinner and prints errors if download fails.
+        """
+        cmd = ["powershell", "-NoProfile", "-Command", self._powershell_command(url, output_path, timeout=360)]
 
-        try:
-            subprocess.run(cmd, check=True)
-        except subprocess.CalledProcessError as e:
+        spinner_chars = "|/-\\"
+        spinner_index = 0
+
+        # Start PowerShell process
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        # Spinner loop
+        while proc.poll() is None:
+            print(f"\r[PS] Downloading {output_path.name} {spinner_chars[spinner_index % 4]}", end="", flush=True)
+            spinner_index += 1
+            time.sleep(0.1)
+
+        # Clear spinner line
+        print("\r" + " " * (len(f"[PS] Downloading {output_path.name} /") + 5) + "\r", end="", flush=True)
+
+        # Capture output
+        stdout, stderr = proc.communicate()
+
+        if proc.returncode != 0:
+            if stdout:
+                print(stdout, end="")
+            if stderr:
+                print(stderr, end="", file=sys.stderr)
+
             _logger.error("PowerShell download failed")
-            raise RuntimeError("PowerShell download failed") from e
+            raise RuntimeError(f"PowerShell download failed (exit code {proc.returncode})")
 
+        # Print final completion message once
+        print(f"[PS] Download complete: {output_path.name}")
         _logger.debug("Downloaded %s -> %s (powershell)", url, output_path)

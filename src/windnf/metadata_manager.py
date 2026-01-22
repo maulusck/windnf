@@ -77,8 +77,12 @@ class MetadataManager:
     # --------------------------------------------------------
     # Main entry: sync one repo
     # --------------------------------------------------------
-
     def sync_repo(self, repo_row: Dict[str, Any]) -> None:
+        """
+        Sync a single repository.
+
+        Raises a RuntimeError with a short, clean message on failure.
+        """
         repo_id = repo_row["id"]
         base_url = repo_row["base_url"]
         repomd_href = repo_row["repomd_url"]
@@ -91,51 +95,44 @@ class MetadataManager:
 
         _logger.info("Sync repo '%s' from %s", repo_row["name"], repomd_url)
 
-        # ----------------------------------------------------
-        # Fetch repomd.xml
-        # ----------------------------------------------------
         try:
+            # Download repomd.xml
             repomd_bytes = self.downloader.download_to_memory(repomd_url)
-        except Exception as e:
-            _logger.error("Failed to download repomd.xml for %s: %s", repo_row["name"], e)
-            return
 
-        # ----------------------------------------------------
-        # Locate *actual* primary_db sqlite
-        # ----------------------------------------------------
-        sqlite_url = self._find_primary_sqlite_url(repomd_bytes, base_url)
-        if not sqlite_url:
-            _logger.error("No <data type=\"primary_db\"> found in repomd.xml — cannot sync repo '%s'", repo_row["name"])
-            return
+            # Locate primary sqlite
+            sqlite_url = self._find_primary_sqlite_url(repomd_bytes, base_url)
+            if not sqlite_url:
+                raise RuntimeError("No primary_db found")
 
-        # ----------------------------------------------------
-        # Download + decompress + validate sqlite
-        # ----------------------------------------------------
-        sqlite_temp = self._download_and_extract_sqlite(sqlite_url)
-        if not sqlite_temp:
-            _logger.error("Failed to prepare sqlite metadata for repo '%s'", repo_row["name"])
-            return
+            # Download, decompress, validate sqlite
+            sqlite_temp = self._download_and_extract_sqlite(sqlite_url)
+            if not sqlite_temp:
+                raise RuntimeError("Failed to prepare sqlite metadata")
 
-        _logger.info("Using sqlite metadata: %s", sqlite_temp)
+            _logger.info("Using sqlite metadata: %s", sqlite_temp)
 
-        # ----------------------------------------------------
-        # Import into unified DB
-        # ----------------------------------------------------
-        _logger.info("Wiping existing packages for repo id %s", repo_id)
-        self.db.wipe_repo_packages(repo_id)
-
-        try:
+            # Import into unified DB
+            _logger.info("Wiping existing packages for repo id %s", repo_id)
+            self.db.wipe_repo_packages(repo_id)
             self.db.import_repodb(sqlite_temp, repo_row["name"])
             self.db.update_repo_timestamp(repo_id, datetime.utcnow().isoformat())
-        except Exception:
-            _logger.exception("Failed to import sqlite metadata for repo %s", repo_row["name"])
+
+        except Exception as e:
+            # log full traceback internally
+            # _logger.exception("Failed to sync repo '%s'", repo_row["name"])
+            # print only concise message to console
+            print(f"Failed to sync repo '{repo_row['name']}'")
+            # raise RuntimeError with clean message for reposync
+            raise RuntimeError(str(e))
         finally:
+            # Cleanup temp file if it exists
             try:
-                os.unlink(sqlite_temp)
+                if "sqlite_temp" in locals() and sqlite_temp:
+                    os.unlink(sqlite_temp)
             except Exception:
                 pass
 
-        _logger.info("Sync complete.")
+        _logger.info("Sync complete for '%s'", repo_row["name"])
 
     # --------------------------------------------------------
     # Step 1: find primary_db sqlite
