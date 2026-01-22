@@ -12,3 +12,4 @@
 - [ ] arch other then x86_64 is still untested
 - [ ] add cool banner on interactive mode
 - [ ] when changing config options, query for auto-refresh of metadata (option 4+3)
+- [ ] src rpm management is still very fucked up, will support later on

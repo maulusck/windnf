@@ -454,4 +454,4 @@ class DbManager:
         for r in repos:
             name = r["name"]
             last_upd = r["last_updated"] or "never"
-            print(f"Repository: {name} last metadata updated at {last_upd}")
+            _logger.debug(f"Repository: {name} last metadata updated at {last_upd}")

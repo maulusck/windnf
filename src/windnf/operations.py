@@ -43,12 +43,9 @@ class Operations:
         escaped_name = re.escape(name)
         return re.sub(escaped_name, highlighted_name, nevra_str, count=1, flags=re.IGNORECASE)
 
-    def print_delimiter(self, title: str) -> None:
+    def print_delimiter(self, title: str = "") -> None:
         width = shutil.get_terminal_size((80, 20)).columns
-        delimiter = "="
-        title_len = len(title) + 2
-        side_len = (width - title_len) // 2
-        line = delimiter * side_len + f" {title} " + delimiter * (width - side_len - title_len)
+        line = f" {title} ".center(width, "=") if title else "=" * width
         print(line)
 
     def _resolve_repo_names_to_ids(self, repo_names: Optional[Sequence[str]]) -> Optional[List[int]]:
@@ -278,19 +275,18 @@ class Operations:
         recursive: bool = False,
         arch: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Internal method: resolves package dependencies. Does NOT print anything."""
         repo_ids = self._resolve_repo_names_to_ids(repo) if repo else None
         to_resolve: List[Dict[str, Any]] = []
 
         for pat in packages:
             rows = self.db.search_packages(pat, repo_filter=repo_ids, exact=True)
             if not rows:
-                _logger.warning("Package not found for resolution: %s", pat)
                 continue
             best_row = max(rows, key=lambda r: NEVRA.from_row(r))
             to_resolve.append(best_row)
 
         if not to_resolve:
-            _logger.info("No packages to resolve dependencies for.")
             return {"resolved_rows": [], "dep_map": {}, "unsatisfied": set()}
 
         provides_map = self.db.provides_map(repo_filter=repo_ids)
@@ -308,8 +304,8 @@ class Operations:
                 continue
             resolved_keys.add(pkgKey)
 
-            reqs = requires_map.get(pkgKey, [])
             dep_map[pkgKey] = []
+            reqs = requires_map.get(pkgKey, [])
 
             for r in reqs:
                 req_name = r["name"]
@@ -324,12 +320,15 @@ class Operations:
                             stack.append(prov_row)
                 else:
                     unsatisfied_dependencies.add(req_name)
-                    _logger.warning("Unsatisfied dependency: %s for package %s", req_name, pkg_row["name"])
 
         resolved_rows = [self.db.get_by_key(k, repo_filter=repo_ids) for k in resolved_keys]
         resolved_rows = [r for r in resolved_rows if r is not None]
 
-        return {"resolved_rows": resolved_rows, "dep_map": dep_map, "unsatisfied": unsatisfied_dependencies}
+        return {
+            "resolved_rows": resolved_rows,
+            "dep_map": dep_map,
+            "unsatisfied": unsatisfied_dependencies,
+        }
 
     def resolve(
         self,
@@ -344,41 +343,43 @@ class Operations:
         resolved = result["resolved_rows"]
         dep_map = result["dep_map"]
         unsatisfied = result["unsatisfied"]
-
         if not resolved:
             _logger.info("No packages resolved.")
             return
-
         printed_keys: Set[int] = set()
-
+        printed_unsatisfied: Set[str] = set()
+        requires_map = self.db.requires_map()
         for pkg_row in resolved:
             pkgKey = pkg_row["pkgKey"]
             pkg_nevra = NEVRA.from_row(pkg_row)
-
-            if verbose:
-                self.print_delimiter(f"Package: {pkg_nevra}")
-                self.info(pkg_row["name"], repo)
-                print("Requires:")
-
             deps = dep_map.get(pkgKey, [])
+            satisfied = {dep["name"] for dep in deps}
+            all_reqs = {r["name"] for r in requires_map.get(pkgKey, [])}
+            unsat_for_pkg = all_reqs - satisfied
             if verbose:
+                self.print_delimiter()
+                print(f"Package: {pkg_nevra}")
                 if deps:
+                    print("Requires:")
                     for dep_row in deps:
-                        req_name = dep_row["name"]
-                        prov_nevra = NEVRA.from_row(dep_row)
-                        print(f"  - {req_name} provided by {prov_nevra}")
-                else:
-                    print("  - <no dependencies>")
-                print("")
+                        dep_nevra = NEVRA.from_row(dep_row)
+                        print(f"  - {dep_row['name']} provided by {dep_nevra}")
+                elif not unsat_for_pkg:
+                    print("Requires: <no dependencies>")
+                if unsat_for_pkg:
+                    for u in sorted(unsat_for_pkg):
+                        _logger.warning("(unsatisfied) %s required by %s", u, pkg_nevra)
+                        printed_unsatisfied.add(u)
             else:
-                for dep_row in deps:
-                    depKey = dep_row["pkgKey"]
-                    if depKey not in printed_keys:
+                printed_unsatisfied.update(unsat_for_pkg)
+            for dep_row in deps:
+                depKey = dep_row["pkgKey"]
+                if depKey not in printed_keys:
+                    if not verbose:
                         print(f"- {NEVRA.from_row(dep_row)}")
-                        printed_keys.add(depKey)
-
-        if not verbose and unsatisfied:
-            _logger.warning("Unsatisfied dependencies: %s", ", ".join(sorted(unsatisfied)))
+                    printed_keys.add(depKey)
+        if not verbose and printed_unsatisfied:
+            _logger.warning("unsatisfied dependencies: %s", ", ".join(sorted(printed_unsatisfied)))
 
     # --- Download Packages ---
     def download(
