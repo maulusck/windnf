@@ -118,18 +118,20 @@ class DbManager:
         return True
 
     def link_source(self, binary_repo: str, source_repo: str) -> None:
-        b = self.get_repo(binary_repo)
-        s = self.get_repo(source_repo)
-        if not b:
-            raise KeyError(f"binary repo '{binary_repo}' not found")
-        if not s:
-            raise KeyError(f"source repo '{source_repo}' not found")
-        if b["type"] != "binary":
-            raise ValueError(f"repo '{binary_repo}' is not a binary repo")
-        if s["type"] != "source":
-            raise ValueError(f"repo '{source_repo}' is not a source repo")
+        binary_repo_row = self.get_repo(binary_repo)
+        source_repo_row = self.get_repo(source_repo)
+        if not binary_repo_row:
+            raise ValueError("Binary repo not found.")
+        if not source_repo_row:
+            raise ValueError("Source repo not found.")
+        if binary_repo_row["type"] != "binary":
+            raise ValueError("Repo type mismatch: Binary repo required.")
+        if source_repo_row["type"] != "source":
+            raise ValueError("Repo type mismatch: Source repo required.")
         with self.conn:
-            self.conn.execute("UPDATE repositories SET source_repo_id=? WHERE id=?", (s["id"], b["id"]))
+            self.conn.execute(
+                "UPDATE repositories SET source_repo_id=? WHERE id=?", (source_repo_row["id"], binary_repo_row["id"])
+            )
 
     def update_repo_timestamp(self, repo_id: int, ts: str) -> None:
         with self.conn:

@@ -1,6 +1,8 @@
 # cli.py
 import argparse
+import os
 import sys
+import traceback
 from pathlib import Path
 
 from .config import Config
@@ -127,6 +129,14 @@ def main():
     except KeyboardInterrupt:
         print("\n[!] Operation interrupted by user (Ctrl+C). Exiting.", file=sys.stderr)
         sys.exit(130)  # 130 = standard exit code for SIGINT
+
+    except Exception as e:
+        print(f"\n[!] An unexpected error occurred: {str(e)}", file=sys.stderr)
+        if os.getenv("WINDNF_DEBUG", "false").lower() == "true":
+            print("\nTraceback details:")
+            traceback.print_exc(file=sys.stderr)  # Full traceback when debugging
+        else:
+            print("For more details, run with the WINDNF_DEBUG environment variable set to 'true'.")
 
 
 if __name__ == "__main__":

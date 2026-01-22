@@ -1,4 +1,3 @@
-# tests/run.py
 import io
 import os
 import sys
@@ -13,6 +12,7 @@ from windnf import cli
 SCRIPT_DIR = Path(__file__).parent.resolve()
 os.chdir(SCRIPT_DIR)
 
+# Temporary download directory to avoid messing up the actual environment
 DOWNLOAD_DIR = SCRIPT_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
