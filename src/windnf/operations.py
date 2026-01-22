@@ -249,9 +249,17 @@ class Operations:
                 for line in name_only:
                     print(line)
 
-    def info(self, patterns: List[str], repo: Optional[List[str]] = None) -> None:
+    def info(
+        self,
+        packages: List[str],
+        repo: Optional[List[str]] = None,
+        weakdeps: bool = False,
+        recursive: bool = False,
+        arch: Optional[str] = None,
+        verbose: bool = False,
+    ) -> None:
         repo_ids = self._resolve_repo_names_to_ids(repo) if repo else None
-        for pat in patterns:
+        for pat in packages:
             rows = self.db.search_packages(pat, repo_filter=repo_ids, exact=True)
             if not rows:
                 _logger.info("No packages match pattern: %s", pat)
