@@ -102,32 +102,43 @@ class Operations:
             return
         term_w = shutil.get_terminal_size((80, 20)).columns
         spacing = 2
-        id_w, type_w, src_w = 4, 6, 12  # make src_w wider for names
-        name_w = 12
-        min_url_w = 20
-        max_url_w = 80
-        remaining = term_w - (id_w + name_w + type_w + src_w + spacing * 4)
+        id_w, type_w, last_w = 4, 6, 30
+        name_w, src_w = 12, 12
+        min_url_w, max_url_w = 20, 80
+        used_width = id_w + name_w + type_w + src_w + last_w + spacing * 5
+        remaining = term_w - used_width
         url_w = min(max_url_w, max(min_url_w, remaining))
+        total_w = id_w + name_w + type_w + src_w + last_w + url_w + spacing * 5
+        if total_w > term_w:
+            shrink_ratio = (term_w - spacing * 5) / (id_w + name_w + type_w + src_w + last_w + url_w)
+            id_w = max(2, int(id_w * shrink_ratio))
+            name_w = max(6, int(name_w * shrink_ratio))
+            type_w = max(4, int(type_w * shrink_ratio))
+            src_w = max(6, int(src_w * shrink_ratio))
+            last_w = max(6, int(last_w * shrink_ratio))
+            url_w = max(10, int(url_w * shrink_ratio))
 
         def trunc(s, w):
-            return s if len(s) <= w else s[: w - 1] + "…"
+            return s if s and len(s) <= w else (s[: w - 1] + "…") if s else "-"
 
         print(
             f"{'ID':<{id_w}}{' '*spacing}{'Name':<{name_w}}{' '*spacing}"
-            f"{'Base URL':<{url_w}}{' '*spacing}{'Type':<{type_w}}{' '*spacing}{'Src':<{src_w}}"
+            f"{'Base URL':<{url_w}}{' '*spacing}{'Type':<{type_w}}{' '*spacing}"
+            f"{'Src':<{src_w}}{' '*spacing}{'Last Synced':<{last_w}}"
         )
         print("-" * term_w)
         for r in rows:
             src_id = r.get("source_repo_id")
+            src_name = "-"
             if src_id:
                 src_repo = self.db.get_repo(src_id)
                 src_name = src_repo["name"] if src_repo else "-"
-            else:
-                src_name = "-"
+            last_synced = r.get("last_updated") or "-"
             name, url = r["name"], r["base_url"]
             print(
-                f"{r['id']:<{id_w}}{' '*spacing}{trunc(name, name_w):<{name_w}}{' '*spacing}"
-                f"{trunc(url, url_w):<{url_w}}{' '*spacing}{r['type']:<{type_w}}{' '*spacing}{trunc(src_name, src_w):<{src_w}}"
+                f"{trunc(str(r['id']), id_w):<{id_w}}{' '*spacing}{trunc(name, name_w):<{name_w}}{' '*spacing}"
+                f"{trunc(url, url_w):<{url_w}}{' '*spacing}{trunc(r['type'], type_w):<{type_w}}{' '*spacing}"
+                f"{trunc(src_name, src_w):<{src_w}}{' '*spacing}{trunc(last_synced, last_w):<{last_w}}"
             )
 
     def reposync(self, names: List[str], all_: bool) -> None:
