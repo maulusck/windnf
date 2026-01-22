@@ -6,10 +6,11 @@
 - [ ] optimize and cleanup code
 - [X] unify db manager return types
 - [ ] think about SRPM management
-- [ ] add `windnf info` command
+- [X] add `windnf info` command
 - [ ] unify db_manager return types
 - [ ] weakdeps are not parsed from XML thus not working (not in db)
 - [ ] arch other then x86_64 is still untested
 - [ ] add cool banner on interactive mode
 - [ ] when changing config options, query for auto-refresh of metadata (option 4+3)
 - [ ] src rpm management is still very fucked up, will support later on
+- [ ] add whatprovides and whatrequires - search by files

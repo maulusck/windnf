@@ -75,7 +75,7 @@ def main():
 
         # info / i
         p_info = subparsers.add_parser("info", aliases=["i"], help="Show full NEVRA package information")
-        p_info.add_argument("pattern")
+        p_info.add_argument("patterns", nargs="+", help="Package patterns (e.g., vlc chromium)")
         p_info.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
         p_info.set_defaults(func=ops.info)
 

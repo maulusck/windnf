@@ -249,22 +249,23 @@ class Operations:
                 for line in name_only:
                     print(line)
 
-    def info(self, pattern: str, repo: Optional[List[str]] = None) -> None:
+    def info(self, patterns: List[str], repo: Optional[List[str]] = None) -> None:
         repo_ids = self._resolve_repo_names_to_ids(repo) if repo else None
-        rows = self.db.search_packages(pattern, repo_filter=repo_ids, exact=True)
-        if not rows:
-            _logger.info("No packages match pattern: %s", pattern)
-            return
-
-        best_row = max(rows, key=lambda row: NEVRA.from_row(row))
-        nevra = NEVRA.from_row(best_row)
-        repo_name = self.db.get_repo(best_row["repo_id"])["name"] if best_row.get("repo_id") else "<unknown>"
-
-        print(f"Package: {nevra}")
-        print(f" Repo: {repo_name}")
-        print(f" Arch: {best_row.get('arch')}")
-        print(f" Summary: {best_row.get('summary')}")
-        print(f" URL: {best_row.get('url') or ''}")
+        for pat in patterns:
+            rows = self.db.search_packages(pat, repo_filter=repo_ids, exact=True)
+            if not rows:
+                _logger.info("No packages match pattern: %s", pat)
+                continue
+            best_row = max(rows, key=lambda row: NEVRA.from_row(row))
+            nevra = NEVRA.from_row(best_row)
+            repo_name = self.db.get_repo(best_row["repo_id"])["name"] if best_row.get("repo_id") else "<unknown>"
+            self.print_delimiter(f"Package Information for {pat}")
+            print(f"Package: {nevra}")
+            print(f" Repo: {repo_name}")
+            print(f" Arch: {best_row.get('arch')}")
+            print(f" Summary: {best_row.get('summary')}")
+            print(f" URL: {best_row.get('url') or ''}")
+            self.print_delimiter()
 
     # --- Dependency Resolver ---
     def _resolve_dependencies(
