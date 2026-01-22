@@ -3,7 +3,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import operations
+from .operations import Operations
 from .config import Config
 
 
@@ -13,8 +13,7 @@ def main():
         # Initialize config + operations
         # ------------------------
         config = Config()
-        operations.init(config)
-        operations._ensure_initialized()
+        ops = Operations(config)  # instantiate Operations
 
         parser = argparse.ArgumentParser(prog="windnf", description="WINDNF package manager CLI")
 
@@ -38,30 +37,30 @@ def main():
             action="store_true",
             help="Sync the repository immediately after adding/updating",
         )
-        p_repoadd.set_defaults(func=operations.repoadd)
+        p_repoadd.set_defaults(func=ops.repoadd)
 
         # repolink / rlk
         p_repolink = subparsers.add_parser("repolink", aliases=["rlk"], help="Link source repo → binary repo")
         p_repolink.add_argument("binary_repo")
         p_repolink.add_argument("source_repo")
-        p_repolink.set_defaults(func=operations.repolink)
+        p_repolink.set_defaults(func=ops.repolink)
 
         # repolist / rl
         p_repolist = subparsers.add_parser("repolist", aliases=["rl"], help="List repositories")
-        p_repolist.set_defaults(func=operations.repolist)
+        p_repolist.set_defaults(func=ops.repolist)
 
         # reposync / rs
         p_reposync = subparsers.add_parser("reposync", aliases=["rs"], help="Sync repository metadata")
         p_reposync.add_argument("names", nargs="*", help="Repository names")
         p_reposync.add_argument("--all", "-A", dest="all_", action="store_true")
-        p_reposync.set_defaults(func=operations.reposync)
+        p_reposync.set_defaults(func=ops.reposync)
 
         # repodel / rd
         p_repodel = subparsers.add_parser("repodel", aliases=["rd"], help="Delete repositories")
         p_repodel.add_argument("names", nargs="*", help="Repository names")
         p_repodel.add_argument("--all", "-A", dest="all_", action="store_true")
         p_repodel.add_argument("--force", "-f", action="store_true")
-        p_repodel.set_defaults(func=operations.repodel)
+        p_repodel.set_defaults(func=ops.repodel)
 
         # ------------------------
         # Package Queries
@@ -72,13 +71,13 @@ def main():
         p_search.add_argument("patterns", nargs="+")
         p_search.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
         p_search.add_argument("--showduplicates", action="store_true")
-        p_search.set_defaults(func=operations.search)
+        p_search.set_defaults(func=ops.search)
 
         # info / i
         p_info = subparsers.add_parser("info", aliases=["i"], help="Show full NEVRA package information")
         p_info.add_argument("pattern")
         p_info.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
-        p_info.set_defaults(func=operations.info)
+        p_info.set_defaults(func=ops.info)
 
         # ------------------------
         # Dependency Resolution
@@ -92,7 +91,7 @@ def main():
         p_resolve.add_argument("--recursive", "-R", action="store_true")
         p_resolve.add_argument("-v", "--verbose", action="store_true", help="Show provides/requires info")
         p_resolve.add_argument("--arch")
-        p_resolve.set_defaults(func=operations.resolve)
+        p_resolve.set_defaults(func=ops.resolve)
 
         # ------------------------
         # Download / dl
@@ -108,7 +107,7 @@ def main():
         p_download.add_argument("--source", "-S", action="store_true")
         p_download.add_argument("--urls", "--url", action="store_true")
         p_download.add_argument("--arch")
-        p_download.set_defaults(func=operations.download)
+        p_download.set_defaults(func=ops.download)
 
         # ------------------------
         # Parse and execute
