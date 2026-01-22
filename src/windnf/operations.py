@@ -78,7 +78,7 @@ class Operations:
             src_id = int(src["id"])
         rid = self.db.add_repo(
             name=name,
-            base_url=baseurl,
+            base_url=baseurl.rstrip("/"),
             repomd_url=repomd,
             rtype=repo_type,
             source_repo_id=src_id,
@@ -102,7 +102,7 @@ class Operations:
             return
         term_w = shutil.get_terminal_size((80, 20)).columns
         spacing = 2
-        id_w, type_w, src_w = 4, 6, 3
+        id_w, type_w, src_w = 4, 6, 12  # make src_w wider for names
         name_w = 12
         min_url_w = 20
         max_url_w = 80
@@ -118,10 +118,16 @@ class Operations:
         )
         print("-" * term_w)
         for r in rows:
-            src, name, url = r.get("source_repo_id") or "-", r["name"], r["base_url"]
+            src_id = r.get("source_repo_id")
+            if src_id:
+                src_repo = self.db.get_repo(src_id)
+                src_name = src_repo["name"] if src_repo else "-"
+            else:
+                src_name = "-"
+            name, url = r["name"], r["base_url"]
             print(
                 f"{r['id']:<{id_w}}{' '*spacing}{trunc(name, name_w):<{name_w}}{' '*spacing}"
-                f"{trunc(url, url_w):<{url_w}}{' '*spacing}{r['type']:<{type_w}}{' '*spacing}{src:<{src_w}}"
+                f"{trunc(url, url_w):<{url_w}}{' '*spacing}{r['type']:<{type_w}}{' '*spacing}{trunc(src_name, src_w):<{src_w}}"
             )
 
     def reposync(self, names: List[str], all_: bool) -> None:
