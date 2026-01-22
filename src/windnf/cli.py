@@ -3,8 +3,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from .operations import Operations
 from .config import Config
+from .operations import Operations
 
 
 def main():

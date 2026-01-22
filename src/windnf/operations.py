@@ -4,6 +4,7 @@ from __future__ import annotations
 import fnmatch
 import re
 import shutil
+import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set
 
@@ -94,14 +95,34 @@ class Operations:
         self.db.link_source(binary_repo, source_repo)
         print(f"Linked binary repo '{binary_repo}' -> source repo '{source_repo}'")
 
-    def repolist(self) -> None:
+    def repolist(self):
         rows = self.db.list_repos()
         if not rows:
             print("No repositories configured.")
             return
+        term_w = shutil.get_terminal_size((80, 20)).columns
+        spacing = 2
+        id_w, type_w, src_w = 4, 6, 3
+        name_w = 12
+        min_url_w = 20
+        max_url_w = 80
+        remaining = term_w - (id_w + name_w + type_w + src_w + spacing * 4)
+        url_w = min(max_url_w, max(min_url_w, remaining))
+
+        def trunc(s, w):
+            return s if len(s) <= w else s[: w - 1] + "…"
+
+        print(
+            f"{'ID':<{id_w}}{' '*spacing}{'Name':<{name_w}}{' '*spacing}"
+            f"{'Base URL':<{url_w}}{' '*spacing}{'Type':<{type_w}}{' '*spacing}{'Src':<{src_w}}"
+        )
+        print("-" * term_w)
         for r in rows:
-            src = r.get("source_repo_id") or "-"
-            print(f"{r['id']:>3} {r['name']:30} {r['base_url']:40} type={r['type']} src_id={src}")
+            src, name, url = r.get("source_repo_id") or "-", r["name"], r["base_url"]
+            print(
+                f"{r['id']:<{id_w}}{' '*spacing}{trunc(name, name_w):<{name_w}}{' '*spacing}"
+                f"{trunc(url, url_w):<{url_w}}{' '*spacing}{r['type']:<{type_w}}{' '*spacing}{src:<{src_w}}"
+            )
 
     def reposync(self, names: List[str], all_: bool) -> None:
         if all_:
