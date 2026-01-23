@@ -6,6 +6,7 @@ import traceback
 from pathlib import Path
 
 from .config import Config
+from .logger import Colors
 from .operations import Operations
 
 
@@ -131,12 +132,14 @@ def main():
         sys.exit(130)  # 130 = standard exit code for SIGINT
 
     except Exception as e:
-        print(f"\n[!] An unexpected error occurred: {str(e)}", file=sys.stderr)
+        print(f"\n{Colors.FG_RED}*** ERROR: {str(e)}{Colors.RESET}", file=sys.stderr)
         if os.getenv("WINDNF_DEBUG", "false").lower() == "true":
-            print("\nTraceback details:")
-            traceback.print_exc(file=sys.stderr)  # Full traceback when debugging
+            print(f"{Colors.FG_RED}*** Debug info: Full traceback follows:{Colors.RESET}", file=sys.stderr)
+            print(f"{Colors.FG_YELLOW}{Colors.BG_BLACK}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            print(Colors.RESET, end="", file=sys.stderr)
         else:
-            print("For more details, run with the WINDNF_DEBUG environment variable set to 'true'.")
+            print(f"{Colors.FG_RED}*** For more details, set WINDNF_DEBUG=1.{Colors.RESET}", file=sys.stderr)
 
 
 if __name__ == "__main__":
