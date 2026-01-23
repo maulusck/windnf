@@ -1,4 +1,4 @@
-> **Warning:** This is a legacy project and kept for compatibility and the lulz.
+> **Warning:** This is a legacy branch and kept for compatibility and the lulz.
 > Feel free to use it, it still works although its functionalities are limited.
 > Switch to 'master' branch for the real deal.
 
