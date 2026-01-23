@@ -1,0 +1,31 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Top horizontal pill, Muted Red -->
+  <rect x="25" y="6" width="50" height="16" rx="8" ry="8" fill="#FF6A6A"/>
+  <!-- Bottom horizontal pill, Gentle Yellow -->
+  <rect x="25" y="78" width="50" height="16" rx="8" ry="8" fill="#FFEB82"/>
+  <!-- Left vertical pill, Balanced Green -->
+  <rect x="6" y="25" width="16" height="50" rx="8" ry="8" fill="#66BB6A"/>
+  <!-- Right vertical pill, Calming Cyan -->
+  <rect x="78" y="25" width="16" height="50" rx="8" ry="8" fill="#00BCD4"/>
+  <!-- Central rounded square -->
+  <rect x="28" y="28" width="44" height="44" rx="6" ry="6" fill="#3A3A3A"/>
+  <!-- winDNF text, Segoe UI font with Aero feel -->
+  <text x="50" y="42"
+        font-family="Segoe UI, Arial, sans-serif"
+        font-size="12"
+        font-weight="bold"
+        fill="white"
+        text-anchor="middle"
+        dominant-baseline="middle">
+    win
+  </text>
+  <text x="50" y="58"
+        font-family="Segoe UI, Arial, sans-serif"
+        font-size="16"
+        font-weight="bold"
+        fill="white"
+        text-anchor="middle"
+        dominant-baseline="middle">
+    DNF
+  </text>
+</svg>
