@@ -8,9 +8,10 @@
 - [ ] think about SRPM management
 - [X] add `windnf info` command
 - [ ] unify db_manager return types (half-done)
-- [ ] weakdeps are not parsed from XML thus not working (not in db)
+- [ ] weakdeps still unsupported
 - [ ] arch other then x86_64 is still untested
 - [ ] add cool banner on interactive mode
 - [ ] NEVRA handling is still very fucked up, will support later on
 - [ ] src rpm management is still very fucked up, will support later on
 - [ ] add whatprovides and whatrequires - search by files
+- [ ] support for old-style XML based repodata
