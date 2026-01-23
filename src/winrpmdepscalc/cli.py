@@ -1,6 +1,7 @@
 import argparse
 import importlib.metadata
 import sys
+import warnings
 from pathlib import Path
 
 import urllib3
@@ -23,6 +24,17 @@ from .operations import (
 from .utils import _logger
 
 __version__ = importlib.metadata.version("winrpmdepscalc")
+
+
+warnings.simplefilter("always", category=DeprecationWarning)
+
+# Show deprecation warning and link to new repository
+warnings.simplefilter("always", category=DeprecationWarning)
+warnings.warn(
+    "This project is deprecated and has moved to a new repository. "
+    "Please migrate to the new project at: https://github.com/maulusck/windnf",
+    DeprecationWarning,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,6 +61,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+
     try:
         args = parse_args()
         config = Config()
