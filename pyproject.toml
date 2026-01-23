@@ -16,12 +16,11 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = ["requests", "PyYAML", "tqdm", "urllib3"]
+dynamic = ["version"]
 
 # Optional (development) dependencies
 [project.optional-dependencies]
 dev = ["black", "isort"]
-
-dynamic = ["version"]
 
 [project.urls]
 Home-page = "https://github.com/maulusck/winrpmdepscalc"
