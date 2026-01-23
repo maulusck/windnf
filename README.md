@@ -1,8 +1,7 @@
+![winDNF Icon](res/windnf.svg)
 # **winDNF** Project
 
 > **winDNF** — The Windows DNF Simulator. Continuing the RPM tradition with quirky naming, seamless [NEVRA](https://deepwiki.com/rpm-software-management/hawkey/4.2-nevra-parsing-and-string-utilities)-based package management, and native performance.
-
-![winDNF Icon](res/windnf.svg)
 
 ## TODO
 ```text
