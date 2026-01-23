@@ -73,6 +73,9 @@ class Downloader:
     def download_to_file(self, url: str, output_path: Union[str, Path]) -> None:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.exists():
+            _logger.info("File already downloaded: %s", output_path)
+            return
 
         if self.backend == DownloaderType.PYTHON:
             self._download_python_to_file(url, output_path)
@@ -129,7 +132,19 @@ class Downloader:
     # -------------------------
     # powershell backend
     # -------------------------
-    def _powershell_command(self, url: str, output_path: Path, timeout: int = 60) -> str:
+    def _powershell_command(self, url: str, output_path: Path, timeout: int = 60, headers: dict = None) -> str:
+        headers = {
+            "Cookie": "cookie1=value1; cookie2=value2",
+            "User-Agent": "MyCustomAgent/1.0",
+            "Authorization": "Bearer mytoken",
+        }
+        headers_str = ""
+
+        if headers:
+            headers_str = (
+                "    -Headers @{ " + " ; ".join([f"'{key}' = '{value}'" for key, value in headers.items()]) + " }"
+            )
+
         return rf"""
     $ErrorActionPreference = 'Stop'
     try {{
@@ -138,7 +153,8 @@ class Downloader:
             -OutFile "{str(output_path)}" `
             -UseBasicParsing `
             -TimeoutSec {timeout} `
-            -ErrorAction Stop
+            -ErrorAction Stop `
+            {headers_str}
     }}
     catch {{
         Write-Host "[PS] Download failed: $($_.Exception.Message)" -ForegroundColor Red
