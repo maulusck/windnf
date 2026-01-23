@@ -92,17 +92,7 @@ class Operations:
             self.db.link_source(binary_repo, source_repo)
             _logger.info(f"Successfully linked binary repo '{binary_repo}' -> source repo '{source_repo}'")
         except ValueError as e:
-            if "Binary repo not found" in str(e):
-                _logger.error(f"Error: The binary repo '{binary_repo}' was not found.")
-            elif "Source repo not found" in str(e):
-                _logger.error(f"Error: The source repo '{source_repo}' was not found.")
-            elif "Repo type mismatch" in str(e):
-                if "Binary" in str(e):
-                    _logger.error(f"Error: The repo '{binary_repo}' is not a binary repo.")
-                elif "Source" in str(e):
-                    _logger.error(f"Error: The repo '{source_repo}' is not a source repo.")
-            else:
-                _logger.error(f"Error linking repositories: {str(e)}")
+            _logger.error(f"Error linking repositories: {str(e)}")
             raise
 
     def repolist(self) -> None:
