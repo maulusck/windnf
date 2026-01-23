@@ -1,3 +1,7 @@
+> **Warning:** This is a legacy project and kept for compatibility and the lulz.
+> Feel free to use it, it still works although its functionalities are limited.
+> Switch to 'master' branch for the real deal.
+
 ### TODO
 - [ ] unify db_manager return types
 - [ ] weakdeps are not parsed from XML thus not working (not in db)
