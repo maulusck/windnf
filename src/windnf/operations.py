@@ -103,7 +103,7 @@ class Operations:
         term_w = shutil.get_terminal_size((80, 20)).columns
         spacing = 2
         id_w, type_w, last_w = 4, 6, 30
-        name_w, src_w = 12, 12
+        name_w, src_w = 15, 15
         min_url_w, max_url_w = 20, 80
         used_width = id_w + name_w + type_w + src_w + last_w + spacing * 5
         remaining = term_w - used_width

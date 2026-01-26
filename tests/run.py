@@ -1,7 +1,7 @@
 import io
 import os
-import sys
 import shutil
+import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
