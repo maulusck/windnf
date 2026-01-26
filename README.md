@@ -1,11 +1,15 @@
-![winDNF Icon](https://raw.githubusercontent.com/maulusck/windnf/refs/heads/master/res/windnf.svg)
-
-# winDNF
+<h1>
+  <img src="https://raw.githubusercontent.com/maulusck/windnf/refs/heads/master/res/windnf.svg"
+       alt="winDNF Icon"
+       width="100"
+       style="vertical-align: middle;">
+  winDNF
+</h1>
 
 A DNF-like RPM simulator for Windows and other non-Linux systems.
 
 winDNF allows you to download RPM packages and their dependencies from standard
-repositories without requiring a Linux environment. It is still a **work in progress**, and many things are not working as they should (see [TODO](https://raw.githubusercontent.com/maulusck/windnf/refs/heads/master/TODO.md)). It is stable for basic usage though.
+repositories without requiring a Linux environment. It is still a **work in progress**, and many things are not working as they should (see [TODO](https://github.com/maulusck/windnf/blob/master/TODO.md). It is stable for basic usage though.
 It works by syncing multiple RPM repositories metadata and querying a single, local DB file in order to resolve packages metadata.
 
 All configuration files and the internal database are stored in your

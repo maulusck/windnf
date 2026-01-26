@@ -4,6 +4,7 @@
 - [x] Unify DB manager return types
 - [ ] Consider SRPM management
 - [x] Add `windnf info` command
+- [ ] showduplicates is messed up as well
 - [ ] Improve NEVRA RPM management (arch/weak/src/real) — will support later once basics are working
 - [ ] Unify DB manager return types (half-done)
 - [ ] Add cool banner in interactive mode
