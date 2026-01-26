@@ -1,7 +1,14 @@
+# logger.py
 import logging
+import sys
+
+
+def is_dumb_terminal():
+    return not sys.stdout.isatty()
 
 
 class Colors:
+    # ANSI definitions (default = enabled)
     RESET = "\033[0m"
 
     # Styles
@@ -12,7 +19,7 @@ class Colors:
     REVERSE = "\033[7m"
     HIDDEN = "\033[8m"
 
-    # Foreground (text) colors
+    # Foreground colors
     FG_BLACK = "\033[30m"
     FG_RED = "\033[31m"
     FG_GREEN = "\033[32m"
@@ -22,7 +29,6 @@ class Colors:
     FG_CYAN = "\033[36m"
     FG_WHITE = "\033[37m"
 
-    # Bright Foreground colors (bold-ish)
     FG_BRIGHT_BLACK = "\033[90m"
     FG_BRIGHT_RED = "\033[91m"
     FG_BRIGHT_GREEN = "\033[92m"
@@ -42,7 +48,6 @@ class Colors:
     BG_CYAN = "\033[46m"
     BG_WHITE = "\033[47m"
 
-    # Bright Background colors
     BG_BRIGHT_BLACK = "\033[100m"
     BG_BRIGHT_RED = "\033[101m"
     BG_BRIGHT_GREEN = "\033[102m"
@@ -51,6 +56,13 @@ class Colors:
     BG_BRIGHT_MAGENTA = "\033[105m"
     BG_BRIGHT_CYAN = "\033[106m"
     BG_BRIGHT_WHITE = "\033[107m"
+
+
+# Disable all colors on dumb terminals (one place, pythonic)
+if is_dumb_terminal():
+    for name, value in vars(Colors).items():
+        if isinstance(value, str) and value.startswith("\033"):
+            setattr(Colors, name, "")
 
 
 class ColorFormatter(logging.Formatter):
@@ -63,7 +75,7 @@ class ColorFormatter(logging.Formatter):
     }
 
     def format(self, record):
-        color = self.COLOR_MAP.get(record.levelno, Colors.RESET)
+        color = self.COLOR_MAP.get(record.levelno, "")
         message = super().format(record)
         return f"{color}{message}{Colors.RESET}"
 
@@ -71,11 +83,11 @@ class ColorFormatter(logging.Formatter):
 def setup_logger(name="windnf", level=logging.DEBUG):
     logger = logging.getLogger(name)
     logger.setLevel(level)
-    ch = logging.StreamHandler()
-    ch.setLevel(level)
-    formatter = ColorFormatter("%(message)s")
-    ch.setFormatter(formatter)
-    # Prevent adding multiple handlers in case of repeated calls
+
     if not logger.hasHandlers():
+        ch = logging.StreamHandler()
+        ch.setLevel(level)
+        ch.setFormatter(ColorFormatter("%(message)s"))
         logger.addHandler(ch)
+
     return logger

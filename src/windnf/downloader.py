@@ -16,7 +16,7 @@ from requests.adapters import HTTPAdapter, Retry
 from tqdm import tqdm
 
 from .config import Config
-from .logger import setup_logger
+from .logger import is_dumb_terminal, setup_logger
 
 _logger = setup_logger()
 
@@ -113,6 +113,7 @@ class Downloader:
                 unit="iB",
                 unit_scale=True,
                 desc=output_path.name,
+                disable=is_dumb_terminal(),
             ) as bar:
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
@@ -181,10 +182,17 @@ class Downloader:
         )
 
         # Spinner loop
-        while proc.poll() is None:
-            print(f"\r[PS] Downloading {output_path.name} {spinner_chars[spinner_index % 4]}", end="", flush=True)
-            spinner_index += 1
-            time.sleep(0.1)
+        if not is_dumb_terminal():
+            while proc.poll() is None:
+                print(
+                    f"\r[PS] Downloading {output_path.name} {spinner_chars[spinner_index % 4]}",
+                    end="",
+                    flush=True,
+                )
+                spinner_index += 1
+                time.sleep(0.1)
+        else:
+            proc.wait()
 
         # Clear spinner line
         print("\r" + " " * (len(f"[PS] Downloading {output_path.name} /") + 5) + "\r", end="", flush=True)

@@ -6,20 +6,32 @@ import traceback
 from pathlib import Path
 
 from .config import Config
-from .logger import Colors
+from .logger import Colors, is_dumb_terminal, setup_logger
 from .operations import Operations
 
 
+def print_logo(log):
+    DOT = "◈"
+    log.info(f"  {Colors.FG_RED}{DOT}{Colors.RESET}")
+    log.info(
+        f"{Colors.FG_GREEN}{DOT}{Colors.RESET}"
+        f" {DOT} "
+        f"{Colors.FG_BLUE}{DOT}{Colors.RESET}   "
+        f"{Colors.FG_YELLOW}win{Colors.BOLD}DNF{Colors.RESET}"
+    )
+    log.info(f"  {Colors.FG_YELLOW}{DOT}{Colors.RESET}")
+
+
 def main():
+    log = setup_logger()
+
     try:
-        # ------------------------
-        # Initialize config + operations
-        # ------------------------
+        not is_dumb_terminal() and print_logo(log)
+
         config = Config()
-        ops = Operations(config)  # instantiate Operations
+        ops = Operations(config)
 
         parser = argparse.ArgumentParser(prog="windnf", description="WINDNF package manager CLI")
-
         subparsers = parser.add_subparsers(dest="command", required=True)
 
         # ------------------------
@@ -43,7 +55,7 @@ def main():
         p_repoadd.set_defaults(func=ops.repoadd)
 
         # repolink / rlk
-        p_repolink = subparsers.add_parser("repolink", aliases=["rlk"], help="Link source repo → binary repo")
+        p_repolink = subparsers.add_parser("repolink", aliases=["rlk"], help="Link source repo -> binary repo")
         p_repolink.add_argument("binary_repo")
         p_repolink.add_argument("source_repo")
         p_repolink.set_defaults(func=ops.repolink)
@@ -146,18 +158,17 @@ def main():
         func(**arg_dict)
 
     except KeyboardInterrupt:
-        print("\n[!] Operation interrupted by user (Ctrl+C). Exiting.", file=sys.stderr)
-        sys.exit(130)  # 130 = standard exit code for SIGINT
+        log.error("\nOperation interrupted by user (Ctrl+C). Exiting.")
+        sys.exit(130)
 
     except Exception as e:
-        print(f"\n{Colors.FG_RED}*** ERROR: {str(e)}{Colors.RESET}", file=sys.stderr)
+        log.error(f"*** ERROR: {e}")
+
         if os.getenv("WINDNF_DEBUG", "false").lower() == "true":
-            print(f"{Colors.FG_RED}*** Debug info: Full traceback follows:{Colors.RESET}", file=sys.stderr)
-            print(f"{Colors.FG_YELLOW}{Colors.BG_BLACK}", file=sys.stderr)
+            log.error("*** Debug info: Full traceback follows:")
             traceback.print_exc(file=sys.stderr)
-            print(Colors.RESET, end="", file=sys.stderr)
         else:
-            print(f"{Colors.FG_RED}*** For more details, set WINDNF_DEBUG=1.{Colors.RESET}", file=sys.stderr)
+            log.error("*** For more details, set WINDNF_DEBUG=1.")
 
 
 if __name__ == "__main__":
