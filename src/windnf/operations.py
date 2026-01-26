@@ -285,7 +285,7 @@ class Operations:
         packages: List[str],
         repo: Optional[List[str]] = None,
         weakdeps: bool = False,
-        recursive: bool = False,
+        recursive: Optional[int] = None,
         arch: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Internal method: resolves package dependencies. Does NOT print anything."""
@@ -306,33 +306,59 @@ class Operations:
         requires_map = self.db.requires_map()
 
         resolved_keys: Set[int] = set()
-        stack: List[Dict[str, Any]] = list(to_resolve)
         dep_map: Dict[int, List[Dict[str, Any]]] = {}
         unsatisfied_dependencies: Set[str] = set()
 
+        # stack entries: (pkg_row, remaining_depth)
+        stack: List[tuple[Dict[str, Any], Optional[int]]] = []
+
+        for row in to_resolve:
+            stack.append((row, recursive))
+
         while stack:
-            pkg_row = stack.pop()
+            pkg_row, depth = stack.pop()
             pkgKey = pkg_row["pkgKey"]
+
             if pkgKey in resolved_keys:
                 continue
             resolved_keys.add(pkgKey)
 
             dep_map[pkgKey] = []
+
+            # depth == 0 → do not expand deps
+            if depth == 0:
+                continue
+
             reqs = requires_map.get(pkgKey, [])
 
             for r in reqs:
                 req_name = r["name"]
                 provider_keys = provides_map.get(req_name, set())
-                if provider_keys:
-                    for pKey in provider_keys:
-                        prov_row = self.db.get_by_key(pKey, repo_filter=repo_ids)
-                        if not prov_row:
-                            continue
-                        dep_map[pkgKey].append(prov_row)
-                        if recursive and pKey not in resolved_keys:
-                            stack.append(prov_row)
-                else:
+
+                if not provider_keys:
                     unsatisfied_dependencies.add(req_name)
+                    continue
+
+                providers: List[Dict[str, Any]] = []
+                for pKey in provider_keys:
+                    prov_row = self.db.get_by_key(pKey, repo_filter=repo_ids)
+                    if prov_row:
+                        providers.append(prov_row)
+
+                if not providers:
+                    unsatisfied_dependencies.add(req_name)
+                    continue
+
+                best = max(providers, key=lambda r: NEVRA.from_row(r))
+                dep_map[pkgKey].append(best)
+
+                if recursive is not None:
+                    if best["pkgKey"] not in resolved_keys:
+                        if depth is None or depth < 0:
+                            next_depth = -1
+                        else:
+                            next_depth = depth - 1
+                        stack.append((best, next_depth))
 
         resolved_rows = [self.db.get_by_key(k, repo_filter=repo_ids) for k in resolved_keys]
         resolved_rows = [r for r in resolved_rows if r is not None]
@@ -348,7 +374,7 @@ class Operations:
         packages: List[str],
         repo: Optional[List[str]] = None,
         weakdeps: bool = False,
-        recursive: bool = False,
+        recursive: Optional[int] = None,
         arch: Optional[str] = None,
         verbose: bool = False,
     ) -> None:
@@ -402,7 +428,7 @@ class Operations:
         downloaddir: Optional[str] = None,
         destdir: Optional[str] = None,
         resolve_flag: bool = False,
-        recurse: bool = False,
+        recurse: Optional[int] = None,
         source: bool = False,
         urls: bool = False,
         arch: Optional[str] = None,

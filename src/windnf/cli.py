@@ -91,7 +91,16 @@ def main():
         p_resolve.add_argument("packages", nargs="+")
         p_resolve.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
         p_resolve.add_argument("--weakdeps", "-w", action="store_true")
-        p_resolve.add_argument("--recursive", "-R", action="store_true")
+        p_resolve.add_argument(
+            "--recursive",
+            "-R",
+            nargs="?",
+            const=-1,
+            type=int,
+            default=None,
+            help="Resolve dependencies recursively. "
+            "Use without value for full tree, or specify depth (e.g. --recursive 2).",
+        )
         p_resolve.add_argument("-v", "--verbose", action="store_true", help="Show provides/requires info")
         p_resolve.add_argument("--arch")
         p_resolve.set_defaults(func=ops.resolve)
@@ -106,7 +115,16 @@ def main():
         p_download.add_argument("--downloaddir", "-x", type=str)
         p_download.add_argument("--destdir", type=str)
         p_download.add_argument("--resolve", action="store_true", dest="resolve_flag")
-        p_download.add_argument("--recurse", "-R", action="store_true")
+        p_download.add_argument(
+            "--recurse",
+            "-R",
+            nargs="?",
+            const=-1,
+            type=int,
+            default=None,
+            help="Download dependencies recursively. "
+            "Use without value for full tree, or specify depth (e.g. --recurse 3).",
+        )
         p_download.add_argument("--source", "-S", action="store_true")
         p_download.add_argument("--urls", "--url", action="store_true")
         p_download.add_argument("--arch")
