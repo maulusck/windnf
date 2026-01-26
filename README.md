@@ -14,6 +14,7 @@ It works by syncing multiple RPM repositories metadata and querying a single, lo
 
 All configuration files and the internal database are stored in your
 home directory at `~/.config/windnf/` by default:
+
 - Config file: `~/.config/windnf/windnf.conf`
 - Database: `~/.config/windnf/windnf.sqlite`
 
@@ -27,6 +28,7 @@ It also timidly tries to be [NEVRA](https://deepwiki.com/rpm-software-management
 ## Installation
 
 winDNF is distributed as a pip package:
+
 ```
 pip install windnf
 ```
@@ -36,6 +38,7 @@ Simple as. No further configuration required.
 ---
 
 ## Usage
+
 ```
 windnf <command> [options] [arguments]
 ```
@@ -65,10 +68,12 @@ Run `windnf <command> --help` for command-specific help.
 
 ## Options (Overview)
 
-Most commands support these common options:
+Many commands support these common options:
 
 - `-r, --repo, --repoid` — Limit the operation to specific repositories
-- `-R, --recursive` — Perform recursive dependency resolution
+- `-R, --recursive [DEPTH]` — Perform recursive dependency resolution
+  - Used without a value, resolves the full dependency tree
+  - When a number is provided, limits recursion depth (e.g. `--recursive 1` for direct dependencies only)
 - `--arch <arch>` — Target a specific architecture (not yet supported)
 
 Use `--help` with any command to see all available options.
@@ -85,15 +90,15 @@ By default, winDNF stores all configuration and the database in:
 
 Contents include:
 
-- `windnf.conf` — main configuration file  
-- `windnf.sqlite` — internal package/repo database  
+- `windnf.conf` — main configuration file
+- `windnf.sqlite` — internal package/repo database
 
 Configurable options in `windnf.conf`:
 
-- `downloader` — method used to download packages (default: `powershell`)  
-- `skip_ssl_verify` — skip SSL verification when downloading (default: true)  
-- `db_path` — path to the internal database (default: `~/.config/windnf/windnf.sqlite`)  
-- `download_path` — default directory for downloaded packages (default: `.`)  
+- `downloader` — method used to download packages (default: `powershell`)
+- `skip_ssl_verify` — skip SSL verification when downloading (default: true)
+- `db_path` — path to the internal database (default: `~/.config/windnf/windnf.sqlite`)
+- `download_path` — default directory for downloaded packages (default: `.`)
 
 You can edit these paths in the config file. winDNF creates missing folders
 and files automatically.
@@ -112,8 +117,8 @@ Enable verbose debug output and full tracebacks.
 
 ## Notes
 
-- winDNF does **not modify your system**.  
-- It reads repository metadata, resolves dependencies, and downloads RPMs only.  
+- winDNF does **not modify your system**.
+- It reads repository metadata, resolves dependencies, and downloads RPMs only.
 - Designed primarily for **Windows or non-Linux systems** where traditional
   package managers are not available.
 
