@@ -1,16 +1,16 @@
 # cli.py
 import argparse
+import logging
 import os
 import sys
 import traceback
-from pathlib import Path
 
 from .config import Config
 from .logger import Colors, is_dumb_terminal, setup_logger
 from .operations import Operations
 
 
-def print_logo(log):
+def print_logo(log: logging.Logger) -> None:
     DOT = "◈"
     log.info(f"  {Colors.FG_RED}{DOT}{Colors.RESET}")
     log.info(
@@ -22,13 +22,15 @@ def print_logo(log):
     log.info(f"  {Colors.FG_YELLOW}{DOT}{Colors.RESET}")
 
 
-def main():
-    log = setup_logger()
+def main() -> None:
+    config = Config()
+    setup_logger(level=config.log_level)
+    log = logging.getLogger("windnf")
 
     try:
-        not is_dumb_terminal() and print_logo(log)
+        if not is_dumb_terminal():
+            print_logo(log)
 
-        config = Config()
         ops = Operations(config)
 
         parser = argparse.ArgumentParser(prog="windnf", description="WINDNF package manager CLI")
@@ -143,7 +145,7 @@ def main():
         p_download.set_defaults(func=ops.download)
 
         # ------------------------
-        # Parse and execute
+        # Parse & execute
         # ------------------------
         args = parser.parse_args()
         func = getattr(args, "func", None)
@@ -158,13 +160,13 @@ def main():
         func(**arg_dict)
 
     except KeyboardInterrupt:
-        log.error("\nOperation interrupted by user (Ctrl+C). Exiting.")
+        log.error("Operation interrupted by user (Ctrl+C).")
         sys.exit(130)
 
-    except Exception as e:
-        log.error(f"*** ERROR: {e}")
-
-        if os.getenv("WINDNF_DEBUG", "false").lower() == "true":
+    except Exception as exc:
+        log.error("*** ERROR: %s", exc)
+        print(os.getenv("WINDNF_DEBUG"))
+        if os.getenv("WINDNF_DEBUG", "").lower() in {"1", "true", "yes"}:
             log.error("*** Debug info: Full traceback follows:")
             traceback.print_exc(file=sys.stderr)
         else:

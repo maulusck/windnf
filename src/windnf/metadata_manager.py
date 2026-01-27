@@ -4,6 +4,7 @@ from __future__ import annotations
 import bz2
 import gzip
 import io
+import logging
 import lzma
 import os
 import re
@@ -17,9 +18,8 @@ from urllib.parse import urljoin
 from .config import Config
 from .db_manager import DbManager
 from .downloader import Downloader
-from .logger import setup_logger
 
-_logger = setup_logger()
+_logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------
@@ -108,7 +108,7 @@ class MetadataManager:
             self.db.update_repo_timestamp(repo_id, datetime.utcnow().isoformat())
 
         except Exception as e:
-            print(f"Failed to sync repo '{repo_row['name']}'")
+            _logger.error(f"Failed to sync repo '{repo_row['name']}'")
             raise RuntimeError(str(e))
         finally:
             try:

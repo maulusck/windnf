@@ -1,6 +1,7 @@
 # downloader.py
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import tempfile
@@ -16,9 +17,9 @@ from requests.adapters import HTTPAdapter, Retry
 from tqdm import tqdm
 
 from .config import Config
-from .logger import is_dumb_terminal, setup_logger
+from .logger import is_dumb_terminal
 
-_logger = setup_logger()
+_logger = logging.getLogger(__name__)
 
 
 class DownloaderType(Enum):

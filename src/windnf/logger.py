@@ -1,14 +1,15 @@
 # logger.py
 import logging
 import sys
+from typing import Union
 
 
-def is_dumb_terminal():
+def is_dumb_terminal() -> bool:
     return not sys.stdout.isatty()
 
 
 class Colors:
-    # ANSI definitions (default = enabled)
+    # Reset
     RESET = "\033[0m"
 
     # Styles
@@ -58,7 +59,9 @@ class Colors:
     BG_BRIGHT_WHITE = "\033[107m"
 
 
-# Disable all colors on dumb terminals (one place, pythonic)
+# -------------------------------------------------
+# Disable colors on dumb terminals (single side-effect)
+# -------------------------------------------------
 if is_dumb_terminal():
     for name, value in vars(Colors).items():
         if isinstance(value, str) and value.startswith("\033"):
@@ -74,20 +77,45 @@ class ColorFormatter(logging.Formatter):
         logging.CRITICAL: Colors.FG_RED + Colors.BOLD,
     }
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         color = self.COLOR_MAP.get(record.levelno, "")
         message = super().format(record)
         return f"{color}{message}{Colors.RESET}"
 
 
-def setup_logger(name="windnf", level=logging.DEBUG):
+_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
+
+
+def setup_logger(
+    name: str = "windnf",
+    level: Union[int, str] = "info",
+) -> logging.Logger:
+    """
+    Configure the application logger.
+
+    Must be called exactly once by the CLI / entrypoint.
+    All other modules should use logging.getLogger(__name__).
+    """
+    if isinstance(level, str):
+        level = _LEVELS.get(level.lower(), logging.INFO)
+
     logger = logging.getLogger(name)
     logger.setLevel(level)
+    logger.propagate = False
 
-    if not logger.hasHandlers():
-        ch = logging.StreamHandler()
-        ch.setLevel(level)
-        ch.setFormatter(ColorFormatter("%(message)s"))
-        logger.addHandler(ch)
+    # Idempotent: do not add handlers twice
+    if logger.handlers:
+        return logger
 
+    handler = logging.StreamHandler()
+    handler.setLevel(level)
+    handler.setFormatter(ColorFormatter("%(message)s"))
+
+    logger.addHandler(handler)
     return logger

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -10,11 +11,11 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 from .config import Config
 from .db_manager import DbManager
 from .downloader import Downloader
-from .logger import Colors, setup_logger
+from .logger import Colors
 from .metadata_manager import MetadataManager
 from .nevra import NEVRA
 
-_logger = setup_logger("windnf.operations")
+_logger = logging.getLogger(__name__)
 
 
 class Operations:
@@ -80,12 +81,7 @@ class Operations:
         )
         _logger.info("Repository '%s' added/updated (id=%s)", name, rid)
         if sync:
-            repo_row = self.db.get_repo(int(rid))
-            if repo_row:
-                self.metadata.sync_repo(repo_row)
-                _logger.info("Repository '%s' synced after add", name)
-            else:
-                _logger.warning("Repo created but could not load repository row for '%s'", name)
+            self.reposync([name], all_=False)
 
     def repolink(self, binary_repo: str, source_repo: str) -> None:
         try:

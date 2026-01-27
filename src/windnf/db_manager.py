@@ -1,6 +1,7 @@
 # db_manager.py
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import tempfile
@@ -12,7 +13,7 @@ from .config import Config
 from .logger import setup_logger
 from .nevra import NEVRA
 
-_logger = setup_logger()
+_logger = logging.getLogger(__name__)
 
 
 class DbManager:
