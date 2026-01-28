@@ -15,7 +15,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
 ]
-dependencies = ["requests", "PyYAML", "tqdm", "urllib3"]
+dependencies = ["requests", "tqdm", "urllib3"]
 dynamic = ["version"]
 
 [project.urls]

@@ -1,5 +1,6 @@
 # cli.py
 import argparse
+import importlib.metadata
 import logging
 import os
 import sys
@@ -8,6 +9,11 @@ import traceback
 from .config import Config
 from .logger import Colors, is_dumb_terminal, setup_logger
 from .operations import Operations
+
+try:
+    __version__ = importlib.metadata.version("windnf")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "dev"  # Fallback for editable installs/source runs
 
 
 def print_logo(log: logging.Logger) -> None:
@@ -34,6 +40,14 @@ def main() -> None:
         ops = Operations(config)
 
         parser = argparse.ArgumentParser(prog="windnf", description="WINDNF package manager CLI")
+        parser = argparse.ArgumentParser(prog="windnf", description="WINDNF package manager CLI")
+        parser.add_argument(
+            "-V",
+            "--version",
+            action="version",
+            version=f"%(prog)s {__version__}",
+            help="show program's version number and exit",
+        )
         subparsers = parser.add_subparsers(dest="command", required=True)
 
         # ------------------------
