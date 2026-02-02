@@ -2,6 +2,7 @@
 - [ ] fix loglevels in logging and have log level configurable in config
 - [ ] Optimize and clean up code
 - [x] Unify DB manager return types
+- [ ] split tests in expecting success/failure
 - [ ] Consider SRPM management
 - [x] Add `windnf info` command
 - [ ] showduplicates is messed up as well
