@@ -172,6 +172,7 @@ def main() -> None:
         arg_dict.pop("command", None)
 
         func(**arg_dict)
+        sys.exit(0)
 
     except KeyboardInterrupt:
         log.error("Operation interrupted by user (Ctrl+C).")
@@ -185,6 +186,7 @@ def main() -> None:
             traceback.print_exc(file=sys.stderr)
         else:
             log.error("*** For more details, set WINDNF_DEBUG=1.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

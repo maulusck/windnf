@@ -19,7 +19,7 @@ from tqdm import tqdm
 from .config import Config
 from .logger import is_dumb_terminal
 
-_logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class DownloaderType(Enum):
@@ -45,9 +45,7 @@ class Downloader:
 
         if skip_ssl_verify:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            _logger.warning(
-                "Warning: SSL verification is disabled. This may expose your application to security risks!"
-            )
+            log.warning("Warning: SSL verification is disabled. This may expose your application to security risks!")
 
         if self.backend == DownloaderType.PYTHON:
             self.session = requests.Session()
@@ -75,7 +73,7 @@ class Downloader:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if output_path.exists():
-            _logger.info("File already downloaded: %s", output_path)
+            log.info("File already downloaded: %s", output_path)
             return
 
         if self.backend == DownloaderType.PYTHON:
@@ -121,7 +119,7 @@ class Downloader:
                         fh.write(chunk)
                         bar.update(len(chunk))
 
-        _logger.debug("Downloaded %s -> %s (python)", url, output_path)
+        log.debug("Downloaded %s -> %s (python)", url, output_path)
 
     def _download_python_to_memory(self, url: str) -> bytes:
         if not self.session:
@@ -207,9 +205,9 @@ class Downloader:
             if stderr:
                 print(stderr, end="", file=sys.stderr)
 
-            _logger.error("PowerShell download failed")
+            log.error("PowerShell download failed")
             raise RuntimeError(f"PowerShell download failed (exit code {proc.returncode})")
 
         # Print final completion message once
         print(f"[PS] Download complete: {output_path.name}")
-        _logger.debug("Downloaded %s -> %s (powershell)", url, output_path)
+        log.debug("Downloaded %s -> %s (powershell)", url, output_path)

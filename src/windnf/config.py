@@ -3,7 +3,7 @@ import configparser
 import logging
 from pathlib import Path
 
-_logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class Config:
@@ -27,7 +27,7 @@ class Config:
         parser = configparser.ConfigParser()
 
         if not self.config_path.exists():
-            _logger.warning("Config file %s not found. Creating default config.", self.config_path)
+            log.warning("Config file %s not found. Creating default config.", self.config_path)
             self._write_default_config()
 
         parser.read(self.config_path)
@@ -56,7 +56,7 @@ class Config:
         with self.config_path.open("w") as f:
             parser.write(f)
 
-        _logger.info("Default config file written to %s", self.config_path)
+        log.info("Default config file written to %s", self.config_path)
 
     def save(self) -> None:
         parser = configparser.ConfigParser()
@@ -71,4 +71,4 @@ class Config:
         with self.config_path.open("w") as f:
             parser.write(f)
 
-        _logger.info("Config saved to %s", self.config_path)
+        log.info("Config saved to %s", self.config_path)

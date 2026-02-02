@@ -19,7 +19,7 @@ from .config import Config
 from .db_manager import DbManager
 from .downloader import Downloader
 
-_logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------
@@ -86,7 +86,7 @@ class MetadataManager:
             if repomd_href.startswith("http")
             else urljoin(base_url.rstrip("/") + "/", repomd_href.lstrip("/"))
         )
-        _logger.info("Sync repo '%s' from %s", repo_row["name"], repomd_url)
+        log.info("Sync repo '%s' from %s", repo_row["name"], repomd_url)
         try:
             # Download repomd.xml
             repomd_bytes = self.downloader.download_to_memory(repomd_url)
@@ -100,15 +100,15 @@ class MetadataManager:
             sqlite_temp = self._download_and_extract_sqlite(sqlite_url)
             if not sqlite_temp:
                 raise RuntimeError("Failed to prepare sqlite metadata")
-            _logger.info("Using sqlite metadata: %s", sqlite_temp)
+            log.info("Using sqlite metadata: %s", sqlite_temp)
             # Import into unified DB
-            _logger.info("Wiping existing packages for repo id %s", repo_id)
+            log.info("Wiping existing packages for repo id %s", repo_id)
             self.db.wipe_repo_packages(repo_id)
             self.db.import_repodb(sqlite_temp, repo_row["name"])
             self.db.update_repo_timestamp(repo_id, datetime.utcnow().isoformat())
 
         except Exception as e:
-            _logger.error(f"Failed to sync repo '{repo_row['name']}'")
+            log.error(f"Failed to sync repo '{repo_row['name']}'")
             raise RuntimeError(str(e))
         finally:
             try:
@@ -116,7 +116,7 @@ class MetadataManager:
                     os.unlink(sqlite_temp)
             except Exception:
                 pass
-        _logger.info("Sync complete for '%s'", repo_row["name"])
+        log.info("Sync complete for '%s'", repo_row["name"])
 
     # --------------------------------------------------------
     # Step 1: find primary_db sqlite
@@ -131,13 +131,13 @@ class MetadataManager:
             except Exception:
                 pass
         if not text:
-            _logger.error("repomd.xml decode failed")
+            log.error("repomd.xml decode failed")
             return None
 
         try:
             root = ET.fromstring(text)
         except Exception as e:
-            _logger.error("repomd.xml parse failed: %s", e)
+            log.error("repomd.xml parse failed: %s", e)
             return None
         ns = {"d": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {"d": ""}
         # STRICT: select <data type="primary_db">
@@ -160,12 +160,12 @@ class MetadataManager:
         try:
             compressed = self.downloader.download_to_memory(url)
         except Exception as e:
-            _logger.error("Failed to download sqlite blob: %s", e)
+            log.error("Failed to download sqlite blob: %s", e)
             return None
         data = _decompress_bytes(compressed)
         # SQLite header validation
         if not data.startswith(self.SQLITE_HEADER):
-            _logger.error("Decompressed file is not SQLite: %s", url)
+            log.error("Decompressed file is not SQLite: %s", url)
             return None
         # Write to temp file
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite")

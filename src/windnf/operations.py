@@ -15,7 +15,7 @@ from .logger import Colors
 from .metadata_manager import MetadataManager
 from .nevra import NEVRA
 
-_logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class Operations:
@@ -24,7 +24,7 @@ class Operations:
         self.db = DbManager(config)
         self.downloader = Downloader(config)
         self.metadata = MetadataManager(config, self.db, self.downloader, max_workers=4)
-        _logger.debug(
+        log.debug(
             "Operations initialized with DB=%s, downloader=%s",
             config.db_path,
             config.downloader,
@@ -56,7 +56,7 @@ class Operations:
         for name in repo_names:
             repo = self.db.get_repo(name)
             if not repo:
-                _logger.error("Repository not found: %s", name)
+                log.error("Repository not found: %s", name)
                 raise ValueError(f"Repository not found: {name}")
             out.append(int(repo["id"]))
         return out
@@ -69,7 +69,7 @@ class Operations:
         if source_repo:
             src = self.db.get_repo(source_repo)
             if not src:
-                _logger.error("Source repo not found: %s", source_repo)
+                log.error("Source repo not found: %s", source_repo)
                 raise ValueError(f"Source repo not found: {source_repo}")
             src_id = int(src["id"])
         rid = self.db.add_repo(
@@ -79,22 +79,22 @@ class Operations:
             rtype=repo_type,
             source_repo_id=src_id,
         )
-        _logger.info("Repository '%s' added/updated (id=%s)", name, rid)
+        log.info("Repository '%s' added/updated (id=%s)", name, rid)
         if sync:
             self.reposync([name], all_=False)
 
     def repolink(self, binary_repo: str, source_repo: str) -> None:
         try:
             self.db.link_source(binary_repo, source_repo)
-            _logger.info(f"Successfully linked binary repo '{binary_repo}' -> source repo '{source_repo}'")
+            log.info(f"Successfully linked binary repo '{binary_repo}' -> source repo '{source_repo}'")
         except ValueError as e:
-            _logger.error(f"Error linking repositories: {str(e)}")
+            log.error(f"Error linking repositories: {str(e)}")
             raise
 
     def repolist(self) -> None:
         rows = self.db.list_repos()
         if not rows:
-            _logger.info("No repositories configured.")
+            log.info("No repositories configured.")
             return
         term_w = shutil.get_terminal_size((80, 20)).columns
         spacing = 2
@@ -142,25 +142,25 @@ class Operations:
         repos = self.db.list_repos() if all_ else [r for n in names if (r := self.db.get_repo(n)) is not None]
 
         if not repos:
-            _logger.info("No repositories to sync.")
+            log.info("No repositories to sync.")
             return
 
         for r in repos:
             name = r["name"]
-            _logger.info("Starting sync for repository '%s'", name)
+            log.info("Starting sync for repository '%s'", name)
             try:
                 self.metadata.sync_repo(r)
             except RuntimeError as e:
-                _logger.error("Failed to sync repository '%s': %s", name, e)
+                log.error("Failed to sync repository '%s': %s", name, e)
             else:
-                _logger.info("Successfully synced repository '%s'", name)
+                log.info("Successfully synced repository '%s'", name)
 
     def repodel(self, names: Optional[List[str]] = None, all_: bool = False, force: bool = False) -> None:
         names = names or []
         repos_to_delete = self.db.list_repos() if all_ else [self.db.get_repo(n) for n in names if self.db.get_repo(n)]
 
         if not repos_to_delete:
-            _logger.info("No repositories found for deletion.")
+            log.info("No repositories found for deletion.")
             return
 
         for repo in repos_to_delete:
@@ -170,9 +170,9 @@ class Operations:
             proceed = force or input(f"Delete repository {name}? [y/N]: ").lower() == "y"
             if proceed:
                 self.db.delete_repo(repo["id"])
-                _logger.info("Deleted repository '%s'", name)
+                log.info("Deleted repository '%s'", name)
             else:
-                _logger.info("Skipped deletion of repository '%s'", name)
+                log.info("Skipped deletion of repository '%s'", name)
 
     # --- Package Search / Info ---
     def search(self, patterns: List[str], repo: Optional[List[str]] = None, showduplicates: bool = False) -> None:
@@ -184,10 +184,10 @@ class Operations:
             if results:
                 all_results.extend(results)
             else:
-                _logger.info("No packages found for pattern: %s", pat)
+                log.info("No packages found for pattern: %s", pat)
 
         if not all_results:
-            _logger.info("No packages matched any patterns.")
+            log.info("No packages matched any patterns.")
             return
 
         # Filter duplicates if needed
@@ -262,7 +262,7 @@ class Operations:
         for pat in packages:
             rows = self.db.search_packages(pat, repo_filter=repo_ids, exact=True)
             if not rows:
-                _logger.info("No packages match pattern: %s", pat)
+                log.info("No packages match pattern: %s", pat)
                 continue
             best_row = max(rows, key=lambda row: NEVRA.from_row(row))
             nevra = NEVRA.from_row(best_row)
@@ -379,7 +379,7 @@ class Operations:
         dep_map = result["dep_map"]
         unsatisfied = result["unsatisfied"]
         if not resolved:
-            _logger.info("No packages resolved.")
+            log.info("No packages resolved.")
             return
         printed_keys: Set[int] = set()
         printed_unsatisfied: Set[str] = set()
@@ -403,7 +403,7 @@ class Operations:
                     print("Requires: <no dependencies>")
                 if unsat_for_pkg:
                     for u in sorted(unsat_for_pkg):
-                        _logger.warning("(unsatisfied) %s required by %s", u, pkg_nevra)
+                        log.warning("(unsatisfied) %s required by %s", u, pkg_nevra)
                         printed_unsatisfied.add(u)
             else:
                 printed_unsatisfied.update(unsat_for_pkg)
@@ -414,7 +414,7 @@ class Operations:
                         print(f"- {NEVRA.from_row(dep_row)}")
                     printed_keys.add(depKey)
         if not verbose and printed_unsatisfied:
-            _logger.warning("unsatisfied dependencies: %s", ", ".join(sorted(printed_unsatisfied)))
+            log.warning("unsatisfied dependencies: %s", ", ".join(sorted(printed_unsatisfied)))
 
     # --- Download Packages ---
     def download(
@@ -434,7 +434,7 @@ class Operations:
             resolved_rows = result["resolved_rows"]
             dep_map = result["dep_map"]
             if not resolved_rows:
-                _logger.info("No packages matched the patterns or dependencies.")
+                log.info("No packages matched the patterns or dependencies.")
                 return
 
             targets: Dict[int, Dict[str, Any]] = {r["pkgKey"]: r for r in resolved_rows}
@@ -452,13 +452,13 @@ class Operations:
                     nv = None
                 rows = self.db.search_packages(str(nv) if nv else p, repo_filter=repo_ids, exact=True)
                 if not rows:
-                    _logger.warning("No match found for package: %s", p)
+                    log.warning("No match found for package: %s", p)
                     continue
                 best = max(rows, key=lambda r: NEVRA.from_row(r))
                 targets_list.append(best)
 
         if not targets_list:
-            _logger.info("No packages selected for download.")
+            log.info("No packages selected for download.")
             return
 
         download_dir = Path(downloaddir) if downloaddir else self.cfg.download_path
@@ -483,7 +483,7 @@ class Operations:
                 nevra = NEVRA.from_row(row)
                 ulist = build_urls_for_row(row)
                 if not ulist:
-                    _logger.info("%s -> no URL available", nevra)
+                    log.info("%s -> no URL available", nevra)
                 else:
                     for u in ulist:
                         print(u)
@@ -499,7 +499,7 @@ class Operations:
             for pkg_row in candidates:
                 urls_list = build_urls_for_row(pkg_row)
                 if not urls_list:
-                    _logger.warning("Skipping %s: no URL available", NEVRA.from_row(pkg_row))
+                    log.warning("Skipping %s: no URL available", NEVRA.from_row(pkg_row))
                     continue
 
                 url = urls_list[0]
@@ -513,7 +513,7 @@ class Operations:
                         data = self.downloader.download_to_memory(url)
                         with open(outpath, "wb") as fh:
                             fh.write(data)
-                    _logger.info("Downloaded %s -> %s", NEVRA.from_row(pkg_row), outpath)
+                    log.info("Downloaded %s -> %s", NEVRA.from_row(pkg_row), outpath)
 
                     if dest_dir:
                         final = dest_dir / filename
@@ -521,8 +521,8 @@ class Operations:
                             import shutil
 
                             shutil.copy2(outpath, final)
-                            _logger.info("Copied to %s", final)
+                            log.info("Copied to %s", final)
                         except Exception as e:
-                            _logger.error("Failed to copy %s: %s", final, e)
+                            log.error("Failed to copy %s: %s", final, e)
                 except Exception as e:
-                    _logger.exception("Download failed for %s: %s", NEVRA.from_row(pkg_row), e)
+                    log.exception("Download failed for %s: %s", NEVRA.from_row(pkg_row), e)

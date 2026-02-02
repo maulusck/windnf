@@ -10,10 +10,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 from .config import Config
-from .logger import setup_logger
 from .nevra import NEVRA
 
-_logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class DbManager:
@@ -31,6 +30,10 @@ class DbManager:
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         # Use Row for dict-like access
         self.conn.row_factory = sqlite3.Row
+        # Caches for hot paths
+        self._provides_cache: Optional[Dict[str, Set[int]]] = None
+        self._requires_cache: Optional[Dict[int, List[Dict[str, Any]]]] = None
+        self._files_cache: Optional[Dict[int, List[str]]] = None
         self._configure_pragmas()
 
         # load schema if present
@@ -39,7 +42,7 @@ class DbManager:
             with open(schema_file, "r", encoding="utf-8") as fh:
                 self.conn.executescript(fh.read())
         else:
-            _logger.debug("Schema file not found at %s — assuming DB already initialized.", schema_file)
+            log.debug("Schema file not found at %s — assuming DB already initialized.", schema_file)
 
     # -------------------------
     # PRAGMA tuning
@@ -52,13 +55,48 @@ class DbManager:
             "PRAGMA journal_mode=WAL;",
             "PRAGMA cache_size=100000;",
             "PRAGMA temp_store=MEMORY;",
+            "PRAGMA optimize;",
+            "PRAGMA analysis_limit=400;",
         )
         cur = self.conn.cursor()
         for p in pragmas:
             try:
                 cur.execute(p)
             except Exception:
-                _logger.debug("PRAGMA failed: %s", p)
+                log.debug("PRAGMA failed: %s", p)
+        cur.close()
+
+    def _bulk_mode(self, enable: bool = True) -> None:
+        """Toggle bulk mode: faster writes, temporarily disable constraints."""
+        pragmas = [
+            "PRAGMA synchronous = OFF" if enable else "PRAGMA synchronous = NORMAL",
+            "PRAGMA journal_mode = MEMORY" if enable else "PRAGMA journal_mode = WAL",
+            "PRAGMA foreign_keys = OFF" if enable else "PRAGMA foreign_keys = ON",
+            "PRAGMA cache_size = -2000000" if enable else "PRAGMA cache_size = 100000",
+        ]
+        cur = self.conn.cursor()
+        for p in pragmas:
+            try:
+                cur.execute(p)
+            except Exception:
+                pass
+        if enable:
+            try:
+                cur.execute("BEGIN IMMEDIATE")
+            except Exception:
+                pass
+        else:
+            try:
+                cur.execute("COMMIT")
+            except Exception:
+                try:
+                    cur.execute("ROLLBACK")
+                except Exception:
+                    pass
+            try:
+                cur.execute("PRAGMA wal_checkpoint(FULL)")
+            except Exception:
+                pass
         cur.close()
 
     # -------------------------
@@ -85,7 +123,7 @@ class DbManager:
             source_repo_id=excluded.source_repo_id
         """
         with self.conn:
-            self.conn.execute(sql, (name, base_url, repomd_url, rtype, source_repo_id))
+            self.conn.execute(sql, (name, base_url.rstrip("/"), repomd_url, rtype, source_repo_id))
         row = self.conn.execute("SELECT id FROM repositories WHERE name=?", (name,)).fetchone()
         return int(row["id"])
 
@@ -131,7 +169,8 @@ class DbManager:
             raise ValueError("Repo type mismatch: Source repo required.")
         with self.conn:
             self.conn.execute(
-                "UPDATE repositories SET source_repo_id=? WHERE id=?", (source_repo_row["id"], binary_repo_row["id"])
+                "UPDATE repositories SET source_repo_id=? WHERE id=?",
+                (source_repo_row["id"], binary_repo_row["id"]),
             )
 
     def update_repo_timestamp(self, repo_id: int, ts: str) -> None:
@@ -142,8 +181,30 @@ class DbManager:
     # Package write helpers
     # -------------------------
     def wipe_repo_packages(self, repo_id: int) -> None:
+        """Fast wipe: delete children first (no FK cascade overhead)."""
+        child_tables = [
+            "changelog",
+            "filelist",
+            "files",
+            "requires",
+            "provides",
+            "conflicts",
+            "obsoletes",
+            "suggests",
+            "enhances",
+            "recommends",
+            "supplements",
+        ]
         with self.conn:
+            pkg_keys_sql = "SELECT pkgKey FROM packages WHERE repo_id=?"
+            for table in child_tables:
+                self.conn.execute(
+                    f"DELETE FROM {table} WHERE pkgKey IN ({pkg_keys_sql})",
+                    (repo_id,),
+                )
             self.conn.execute("DELETE FROM packages WHERE repo_id=?", (repo_id,))
+        # Invalidate caches after wipe
+        self.invalidate_caches()
 
     def insert_package(self, repo_id: int, pkg: Dict[str, Any]) -> int:
         """
@@ -220,6 +281,7 @@ class DbManager:
             raise RuntimeError(f"Failed to attach {src_path}: {e}")
 
         try:
+            self._bulk_mode(True)  # Enable bulk insert mode
             mapping: Dict[int, int] = {}
 
             # copy packages
@@ -294,7 +356,8 @@ class DbManager:
                 if data:
                     with self.conn:
                         self.conn.executemany(
-                            "INSERT INTO filelist (pkgKey, dirname, filenames, filetypes) VALUES (?, ?, ?, ?)", data
+                            "INSERT INTO filelist (pkgKey, dirname, filenames, filetypes) VALUES (?, ?, ?, ?)",
+                            data,
                         )
 
             # changelog
@@ -313,12 +376,15 @@ class DbManager:
                             "INSERT INTO changelog (pkgKey, author, date, changelog) VALUES (?, ?, ?, ?)", data
                         )
         finally:
+            self._bulk_mode(False)  # Restore normal mode + checkpoint
             try:
                 cur.execute(f"DETACH DATABASE {attach_alias}")
             except sqlite3.DatabaseError:
-                _logger.debug("Detach failed for %s (ignored)", attach_alias)
+                log.debug("Detach failed for %s (ignored)", attach_alias)
             cur.close()
 
+        # Invalidate caches after import
+        self.invalidate_caches()
         return repo_id
 
     def _table_exists_in_attached(self, attach_alias: str, table: str) -> bool:
@@ -346,34 +412,59 @@ class DbManager:
         """
         Return a mapping: provide_name -> set(pkgKeys)
         Only include packages from repos in repo_filter if provided.
+        Caches result when repo_filter is None.
         """
+        if self._provides_cache is not None and repo_filter is None:
+            return self._provides_cache
+
         out: Dict[str, Set[int]] = {}
-        sql = "SELECT p.name, p.pkgKey, pkg.repo_id FROM provides p " "JOIN packages pkg ON p.pkgKey = pkg.pkgKey"
+        sql = "SELECT p.name, p.pkgKey, pkg.repo_id FROM provides p JOIN packages pkg ON p.pkgKey = pkg.pkgKey"
         for r in self.conn.execute(sql):
-            if repo_filter and r["repo_id"] not in repo_filter:
+            if repo_filter is not None and r["repo_id"] not in repo_filter:
                 continue
-            out.setdefault(r["name"], set()).add(r["pkgKey"])
+            out.setdefault(r["name"], set()).add(int(r["pkgKey"]))
+
+        if repo_filter is None:
+            self._provides_cache = out
         return out
 
     def requires_map(self) -> Dict[int, List[Dict[str, Any]]]:
         """
         Return a mapping: pkgKey -> list of requirements
+        Caches result for reuse.
         """
+        if self._requires_cache is not None:
+            return self._requires_cache
+
         out: Dict[int, List[Dict[str, Any]]] = {}
         for r in self.conn.execute("SELECT * FROM requires"):
-            out.setdefault(r["pkgKey"], []).append(dict(r))
+            out.setdefault(int(r["pkgKey"]), []).append(dict(r))
+
+        self._requires_cache = out
         return out
 
     def files_map(self) -> Dict[int, List[str]]:
         """
         Return a mapping of pkgKey -> list of filenames in that package.
         Example: { 123: ['usr/bin/foo', 'usr/lib/bar'], 124: [...] }
+        Caches result for reuse.
         """
+        if self._files_cache is not None:
+            return self._files_cache
+
         out: Dict[int, List[str]] = {}
         rows = self.conn.execute("SELECT pkgKey, name FROM files").fetchall()
         for row in rows:
-            out.setdefault(row["pkgKey"], []).append(row["name"])
+            out.setdefault(int(row["pkgKey"]), []).append(row["name"])
+
+        self._files_cache = out
         return out
+
+    def invalidate_caches(self) -> None:
+        """Clear caches after import/wipe operations."""
+        self._provides_cache = None
+        self._requires_cache = None
+        self._files_cache = None
 
     def get_by_key(self, pkgKey: int, repo_filter: Optional[Sequence[int]] = None) -> Optional[Dict[str, Any]]:
         """
@@ -382,7 +473,7 @@ class DbManager:
         r = self.conn.execute("SELECT * FROM packages WHERE pkgKey=?", (pkgKey,)).fetchone()
         if not r:
             return None
-        if repo_filter and r["repo_id"] not in repo_filter:
+        if repo_filter is not None and r["repo_id"] not in repo_filter:
             return None
         return dict(r)
 
@@ -445,7 +536,7 @@ class DbManager:
 
     def _print_repo_info(self, repo_ids: Optional[Sequence[int]] = None) -> None:
         # Fetch repository name(s) and last_updated times, print info like:
-        # "Repository: <repo name> last metadata updated at <time>"
+        # "Repository: last metadata updated at "
         # Support multiple repo ids by printing each line.
         if repo_ids is None:
             # If None, print info for all repos
@@ -457,4 +548,9 @@ class DbManager:
         for r in repos:
             name = r["name"]
             last_upd = r["last_updated"] or "never"
-            _logger.debug(f"Repository: {name} last metadata updated at {last_upd}")
+            log.debug(f"Repository: {name} last metadata updated at {last_upd}")
+
+    def close(self) -> None:
+        """Close connection and clear caches."""
+        self.invalidate_caches()
+        self.conn.close()
