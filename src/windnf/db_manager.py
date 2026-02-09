@@ -1,4 +1,3 @@
-# db_manager.py
 from __future__ import annotations
 
 import logging
@@ -28,15 +27,12 @@ class DbManager:
         self.config = config
         self.db_path = Path(self.config.db_path)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        # Use Row for dict-like access
         self.conn.row_factory = sqlite3.Row
-        # Caches for hot paths
         self._provides_cache: Optional[Dict[str, Set[int]]] = None
         self._requires_cache: Optional[Dict[int, List[Dict[str, Any]]]] = None
         self._files_cache: Optional[Dict[int, List[str]]] = None
         self._configure_pragmas()
 
-        # load schema if present
         schema_file = Path(schema_path) if schema_path else (Path(__file__).parent / "schema.sql")
         if schema_file.exists():
             with open(schema_file, "r", encoding="utf-8") as fh:
@@ -44,11 +40,7 @@ class DbManager:
         else:
             log.debug("Schema file not found at %s — assuming DB already initialized.", schema_file)
 
-    # -------------------------
-    # PRAGMA tuning
-    # -------------------------
     def _configure_pragmas(self) -> None:
-        # Good defaults for local single-process ingestion; WAL can be enabled if needed.
         pragmas = (
             "PRAGMA foreign_keys=ON;",
             "PRAGMA synchronous=NORMAL;",
@@ -99,9 +91,6 @@ class DbManager:
                 pass
         cur.close()
 
-    # -------------------------
-    # Repository CRUD
-    # -------------------------
     def add_repo(
         self,
         name: str,
@@ -177,9 +166,6 @@ class DbManager:
         with self.conn:
             self.conn.execute("UPDATE repositories SET last_updated=? WHERE id=?", (ts, repo_id))
 
-    # -------------------------
-    # Package write helpers
-    # -------------------------
     def wipe_repo_packages(self, repo_id: int) -> None:
         """Fast wipe: delete children first (no FK cascade overhead)."""
         child_tables = [
@@ -203,7 +189,6 @@ class DbManager:
                     (repo_id,),
                 )
             self.conn.execute("DELETE FROM packages WHERE repo_id=?", (repo_id,))
-        # Invalidate caches after wipe
         self.invalidate_caches()
 
     def insert_package(self, repo_id: int, pkg: Dict[str, Any]) -> int:
@@ -252,9 +237,6 @@ class DbManager:
         with self.conn:
             self.conn.executemany(sql, data)
 
-    # -------------------------
-    # Import repodata sqlite file (on disk)
-    # -------------------------
     def import_repodb(self, sqlite_path: Union[str, Path], target_repo_name: str) -> int:
         """
         Attach an external repodata sqlite file and copy its contents into our unified DB.
@@ -281,10 +263,9 @@ class DbManager:
             raise RuntimeError(f"Failed to attach {src_path}: {e}")
 
         try:
-            self._bulk_mode(True)  # Enable bulk insert mode
+            self._bulk_mode(True)
             mapping: Dict[int, int] = {}
 
-            # copy packages
             if self._table_exists_in_attached(attach_alias, "packages"):
                 src_rows = list(self.conn.execute(f"SELECT * FROM {attach_alias}.packages"))
                 for src in src_rows:
@@ -295,7 +276,6 @@ class DbManager:
                     if old_key is not None:
                         mapping[int(old_key)] = int(new_key)
 
-            # helper to copy relation-like tables
             def _copy_table(table_name: str, columns: List[str]) -> None:
                 if not self._table_exists_in_attached(attach_alias, table_name):
                     return
@@ -327,7 +307,6 @@ class DbManager:
             _copy_table("recommends", relation_cols)
             _copy_table("supplements", relation_cols)
 
-            # files
             if self._table_exists_in_attached(attach_alias, "files"):
                 rows = list(self.conn.execute(f"SELECT name, type, pkgKey FROM {attach_alias}.files"))
                 data = []
@@ -341,7 +320,6 @@ class DbManager:
                     with self.conn:
                         self.conn.executemany("INSERT INTO files (name, type, pkgKey) VALUES (?, ?, ?)", data)
 
-            # filelist
             if self._table_exists_in_attached(attach_alias, "filelist"):
                 rows = list(
                     self.conn.execute(f"SELECT dirname, filenames, filetypes, pkgKey FROM {attach_alias}.filelist")
@@ -360,7 +338,6 @@ class DbManager:
                             data,
                         )
 
-            # changelog
             if self._table_exists_in_attached(attach_alias, "changelog"):
                 rows = list(self.conn.execute(f"SELECT pkgKey, author, date, changelog FROM {attach_alias}.changelog"))
                 data = []
@@ -376,14 +353,13 @@ class DbManager:
                             "INSERT INTO changelog (pkgKey, author, date, changelog) VALUES (?, ?, ?, ?)", data
                         )
         finally:
-            self._bulk_mode(False)  # Restore normal mode + checkpoint
+            self._bulk_mode(False)
             try:
                 cur.execute(f"DETACH DATABASE {attach_alias}")
             except sqlite3.DatabaseError:
                 log.debug("Detach failed for %s (ignored)", attach_alias)
             cur.close()
 
-        # Invalidate caches after import
         self.invalidate_caches()
         return repo_id
 
@@ -392,9 +368,6 @@ class DbManager:
         r = self.conn.execute(q, (table,)).fetchone()
         return bool(r)
 
-    # -------------------------
-    # Query helpers (NEVRA-aware)
-    # -------------------------
     def get_all_packages(self) -> Dict[int, Dict[str, Any]]:
         rows = self.conn.execute("SELECT * FROM packages").fetchall()
         return {int(r["pkgKey"]): dict(r) for r in rows}
@@ -481,11 +454,10 @@ class DbManager:
         self,
         pattern: str,
         repo_filter: Optional[Sequence[int]] = None,
-        exact: bool = False,  # True = exact match, False = fuzzy/wildcard
+        exact: bool = False,
     ) -> List[Dict[str, Any]]:
         self._print_repo_info(repo_filter)
 
-        # Try NEVRA parsing only if not forcing exact name match
         nv = None
         if not exact:
             try:
@@ -501,7 +473,6 @@ class DbManager:
             params.extend(repo_filter)
 
         if nv is not None:
-            # Full NEVRA match
             where.append("name = ?")
             params.append(nv.name)
             if nv.epoch is not None:
@@ -518,11 +489,9 @@ class DbManager:
                 params.append(nv.arch)
         else:
             if exact:
-                # Exact name-only match
                 where.append("name = ?")
                 params.append(pattern)
             else:
-                # Wildcards + substring search
                 sql_pattern = pattern.replace("*", "%") if "*" in pattern else f"%{pattern}%"
                 where.append("(LOWER(name) LIKE LOWER(?) OR LOWER(summary) LIKE LOWER(?))")
                 params.extend([sql_pattern, sql_pattern])
@@ -535,11 +504,7 @@ class DbManager:
         return [dict(row) for row in rows]
 
     def _print_repo_info(self, repo_ids: Optional[Sequence[int]] = None) -> None:
-        # Fetch repository name(s) and last_updated times, print info like:
-        # "Repository: last metadata updated at "
-        # Support multiple repo ids by printing each line.
         if repo_ids is None:
-            # If None, print info for all repos
             repos = self.conn.execute("SELECT name, last_updated FROM repositories ORDER BY name").fetchall()
         else:
             q = "SELECT name, last_updated FROM repositories WHERE id IN ({})".format(",".join("?" for _ in repo_ids))

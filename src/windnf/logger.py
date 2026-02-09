@@ -1,4 +1,3 @@
-# logger.py
 import logging
 import sys
 from typing import Union
@@ -9,10 +8,8 @@ def is_dumb_terminal() -> bool:
 
 
 class Colors:
-    # Reset
     RESET = "\033[0m"
 
-    # Styles
     BOLD = "\033[1m"
     DIM = "\033[2m"
     UNDERLINE = "\033[4m"
@@ -20,7 +17,6 @@ class Colors:
     REVERSE = "\033[7m"
     HIDDEN = "\033[8m"
 
-    # Foreground colors
     FG_BLACK = "\033[30m"
     FG_RED = "\033[31m"
     FG_GREEN = "\033[32m"
@@ -39,7 +35,6 @@ class Colors:
     FG_BRIGHT_CYAN = "\033[96m"
     FG_BRIGHT_WHITE = "\033[97m"
 
-    # Background colors
     BG_BLACK = "\033[40m"
     BG_RED = "\033[41m"
     BG_GREEN = "\033[42m"
@@ -59,9 +54,6 @@ class Colors:
     BG_BRIGHT_WHITE = "\033[107m"
 
 
-# -------------------------------------------------
-# Disable colors on dumb terminals (single side-effect)
-# -------------------------------------------------
 if is_dumb_terminal():
     for name, value in vars(Colors).items():
         if isinstance(value, str) and value.startswith("\033"):
@@ -109,7 +101,6 @@ def setup_logger(
     logger.setLevel(level)
     logger.propagate = False
 
-    # Idempotent: do not add handlers twice
     if logger.handlers:
         return logger
 

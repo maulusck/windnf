@@ -1,11 +1,8 @@
-# nevra.py
 import functools
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
-# Regex supports names with dots, dashes, underscores, plus, digits.
-# Accepts optional epoch in the form -E:version-release.arch
 NEVRA_RE = re.compile(
     r"""
     ^
@@ -35,11 +32,11 @@ def rpmvercmp(a: str, b: str) -> int:
     """
 
     def split_parts(s: str):
-        # split into numeric and non-numeric chunks
+
         return re.findall(r"[0-9]+|[^0-9]+", s or "")
 
     def cmp_item(x, y):
-        # compare numeric if both digits, else lexicographic
+
         if isinstance(x, int) and isinstance(y, int):
             return (x > y) - (x < y)
         return (str(x) > str(y)) - (str(x) < str(y))
@@ -56,7 +53,6 @@ def rpmvercmp(a: str, b: str) -> int:
             if xa != xb:
                 return (xa > xb) - (xa < xb)
 
-    # if all zipped parts equal, longer sequence wins
     return (len(pa) > len(pb)) - (len(pa) < len(pb))
 
 
@@ -77,14 +73,10 @@ class NEVRA:
     release: Optional[str]
     arch: Optional[str]
 
-    # Optional metadata fields (not part of canonical NEVRA key)
     pkgId: Optional[str] = None
     repo_id: Optional[int] = None
     src: bool = False
 
-    # -----
-    # Parsing / construction
-    # -----
     @staticmethod
     def parse(s: str) -> "NEVRA":
         """
@@ -140,13 +132,10 @@ class NEVRA:
         """
         if filename.endswith(".rpm"):
             filename = filename[:-4]
-        # strip path
         fname = filename.split("/")[-1].split("\\")[-1]
-        # try matching NEVRA pattern directly
         try:
             return NEVRA.parse(fname)
         except ValueError:
-            # fallback: try to locate last ".arch" segment and parse
             if "." not in fname:
                 raise ValueError(f"Cannot parse rpm filename into NEVRA: {filename}")
             arch = fname.split(".")[-1]
@@ -156,9 +145,6 @@ class NEVRA:
             except ValueError:
                 raise ValueError(f"Cannot parse rpm filename into NEVRA: {filename}")
 
-    # -----
-    # String forms
-    # -----
     def __str__(self) -> str:
         e = f"{self.epoch}:" if self.epoch else ""
         return f"{self.name}-{e}{self.version}-{self.release}.{self.arch}"
@@ -172,9 +158,6 @@ class NEVRA:
         e = f"{self.epoch}:" if self.epoch else ""
         return f"{self.name}-{e}{self.version}-{self.release}.{self.arch}"
 
-    # -----
-    # Ordering / comparison
-    # -----
     def _cmp_tuple(self) -> Tuple:
         epoch_val = int(self.epoch) if (self.epoch and self.epoch.isdigit()) else 0
         return (self.name, epoch_val, self.version or "", self.release or "", self.arch or "")
@@ -188,32 +171,24 @@ class NEVRA:
         if not isinstance(other, NEVRA):
             return NotImplemented
 
-        # Name compare
         if self.name != other.name:
             return self.name < other.name
 
-        # Epoch compare numeric
         e1 = int(self.epoch or 0)
         e2 = int(other.epoch or 0)
         if e1 != e2:
             return e1 < e2
 
-        # Version compare with rpmvercmp
         c = rpmvercmp(self.version or "", other.version or "")
         if c != 0:
             return c < 0
 
-        # Release compare with rpmvercmp
         c = rpmvercmp(self.release or "", other.release or "")
         if c != 0:
             return c < 0
 
-        # Arch compare lexicographic
         return (self.arch or "") < (other.arch or "")
 
-    # -----
-    # DB helpers
-    # -----
     def as_db_filters(self) -> Dict[str, Any]:
         """
         Convert to dict of non-None NEVRA fields, suitable to build SQL WHERE clauses.

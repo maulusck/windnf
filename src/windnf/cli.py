@@ -1,4 +1,3 @@
-# cli.py
 import argparse
 import importlib.metadata
 import logging
@@ -13,7 +12,7 @@ from .operations import Operations
 try:
     __version__ = importlib.metadata.version("windnf")
 except importlib.metadata.PackageNotFoundError:
-    __version__ = "dev"  # Fallback for editable installs/source runs
+    __version__ = "dev"
 
 
 def print_logo(log: logging.Logger) -> None:
@@ -50,11 +49,6 @@ def main() -> None:
         )
         subparsers = parser.add_subparsers(dest="command", required=True)
 
-        # ------------------------
-        # Repository Commands
-        # ------------------------
-
-        # repoadd / ra
         p_repoadd = subparsers.add_parser("repoadd", aliases=["ra"], help="Add (or update) a repository")
         p_repoadd.add_argument("name")
         p_repoadd.add_argument("baseurl")
@@ -70,51 +64,36 @@ def main() -> None:
         )
         p_repoadd.set_defaults(func=ops.repoadd)
 
-        # repolink / rlk
         p_repolink = subparsers.add_parser("repolink", aliases=["rlk"], help="Link source repo -> binary repo")
         p_repolink.add_argument("binary_repo")
         p_repolink.add_argument("source_repo")
         p_repolink.set_defaults(func=ops.repolink)
 
-        # repolist / rl
         p_repolist = subparsers.add_parser("repolist", aliases=["rl"], help="List repositories")
         p_repolist.set_defaults(func=ops.repolist)
 
-        # reposync / rs
         p_reposync = subparsers.add_parser("reposync", aliases=["rs"], help="Sync repository metadata")
         p_reposync.add_argument("names", nargs="*", help="Repository names")
         p_reposync.add_argument("--all", "-A", dest="all_", action="store_true")
         p_reposync.set_defaults(func=ops.reposync)
 
-        # repodel / rd
         p_repodel = subparsers.add_parser("repodel", aliases=["rd"], help="Delete repositories")
         p_repodel.add_argument("names", nargs="*", help="Repository names")
         p_repodel.add_argument("--all", "-A", dest="all_", action="store_true")
         p_repodel.add_argument("--force", "-f", action="store_true")
         p_repodel.set_defaults(func=ops.repodel)
 
-        # ------------------------
-        # Package Queries
-        # ------------------------
-
-        # search / s
         p_search = subparsers.add_parser("search", aliases=["s"], help="Search for packages")
         p_search.add_argument("patterns", nargs="+")
         p_search.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
         p_search.add_argument("--showduplicates", action="store_true")
         p_search.set_defaults(func=ops.search)
 
-        # info / i
         p_info = subparsers.add_parser("info", aliases=["i"], help="Show full NEVRA package information")
         p_info.add_argument("packages", nargs="+", help="Package patterns (e.g., vlc chromium)")
         p_info.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
         p_info.set_defaults(func=ops.info)
 
-        # ------------------------
-        # Dependency Resolution
-        # ------------------------
-
-        # resolve / rv
         p_resolve = subparsers.add_parser("resolve", aliases=["rv", "deplist"], help="Resolve dependency sets")
         p_resolve.add_argument("packages", nargs="+")
         p_resolve.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
@@ -132,10 +111,6 @@ def main() -> None:
         p_resolve.add_argument("-v", "--verbose", action="store_true", help="Show provides/requires info")
         p_resolve.add_argument("--arch")
         p_resolve.set_defaults(func=ops.resolve)
-
-        # ------------------------
-        # Download / dl
-        # ------------------------
 
         p_download = subparsers.add_parser("download", aliases=["dl"], help="Download packages / SRPMs")
         p_download.add_argument("packages", nargs="+")
@@ -158,9 +133,6 @@ def main() -> None:
         p_download.add_argument("--arch")
         p_download.set_defaults(func=ops.download)
 
-        # ------------------------
-        # Parse & execute
-        # ------------------------
         args = parser.parse_args()
         func = getattr(args, "func", None)
         if func is None:

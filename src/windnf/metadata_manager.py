@@ -1,4 +1,3 @@
-# metadata_manager.py
 from __future__ import annotations
 
 import bz2
@@ -22,24 +21,18 @@ from .downloader import Downloader
 log = logging.getLogger(__name__)
 
 
-# ------------------------------------------------------------
-# Decompression
-# ------------------------------------------------------------
 def _decompress_bytes(data: bytes) -> bytes:
     """Try gzip, bz2, xz. Return raw data if none apply."""
-    # gzip
     try:
         if data.startswith(b"\x1f\x8b"):
             return gzip.decompress(data)
     except Exception:
         pass
-    # bz2
     try:
         if data.startswith(b"BZh"):
             return bz2.decompress(data)
     except Exception:
         pass
-    # xz
     try:
         if data.startswith(b"\xfd7zXZ\x00"):
             return lzma.decompress(data)
@@ -49,9 +42,6 @@ def _decompress_bytes(data: bytes) -> bytes:
     return data
 
 
-# ------------------------------------------------------------
-# Metadata Manager
-# ------------------------------------------------------------
 class MetadataManager:
     """
     RPM metadata syncing, but strictly SQLite-first.
@@ -71,9 +61,6 @@ class MetadataManager:
         self.downloader = downloader
         self.max_workers = max_workers
 
-    # --------------------------------------------------------
-    # Main entry: sync one repo
-    # --------------------------------------------------------
     def sync_repo(self, repo_row: Dict[str, Any]) -> None:
         """
         Sync a single repository.
@@ -88,20 +75,16 @@ class MetadataManager:
         )
         log.info("Sync repo '%s' from %s", repo_row["name"], repomd_url)
         try:
-            # Download repomd.xml
             repomd_bytes = self.downloader.download_to_memory(repomd_url)
             if re.search(r"techarohq\/anubis", repomd_bytes.decode("utf-8", "ignore"), re.IGNORECASE):
                 raise RuntimeError(f"Anubis protection is blocking the download of repo '{repo_row['name']}'")
-            # Locate primary sqlite
             sqlite_url = self._find_primary_sqlite_url(repomd_bytes, base_url)
             if not sqlite_url:
                 raise RuntimeError("No primary_db found")
-            # Download, decompress, validate sqlite
             sqlite_temp = self._download_and_extract_sqlite(sqlite_url)
             if not sqlite_temp:
                 raise RuntimeError("Failed to prepare sqlite metadata")
             log.info("Using sqlite metadata: %s", sqlite_temp)
-            # Import into unified DB
             log.info("Wiping existing packages for repo id %s", repo_id)
             self.db.wipe_repo_packages(repo_id)
             self.db.import_repodb(sqlite_temp, repo_row["name"])
@@ -118,11 +101,7 @@ class MetadataManager:
                 pass
         log.info("Sync complete for '%s'", repo_row["name"])
 
-    # --------------------------------------------------------
-    # Step 1: find primary_db sqlite
-    # --------------------------------------------------------
     def _find_primary_sqlite_url(self, repomd_bytes: bytes, base_url: str) -> Optional[str]:
-        # decode XML
         text = None
         for enc in ("utf-8", "latin1"):
             try:
@@ -140,7 +119,6 @@ class MetadataManager:
             log.error("repomd.xml parse failed: %s", e)
             return None
         ns = {"d": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {"d": ""}
-        # STRICT: select <data type="primary_db">
         for data in root.findall("d:data", ns):
             if data.get("type") != "primary_db":
                 continue
@@ -153,9 +131,6 @@ class MetadataManager:
             return href if href.startswith("http") else urljoin(base_url.rstrip("/") + "/", href.lstrip("/"))
         return None
 
-    # --------------------------------------------------------
-    # Step 2: Download compressed sqlite → decompress → validate
-    # --------------------------------------------------------
     def _download_and_extract_sqlite(self, url: str) -> Optional[str]:
         try:
             compressed = self.downloader.download_to_memory(url)
@@ -163,11 +138,9 @@ class MetadataManager:
             log.error("Failed to download sqlite blob: %s", e)
             return None
         data = _decompress_bytes(compressed)
-        # SQLite header validation
         if not data.startswith(self.SQLITE_HEADER):
             log.error("Decompressed file is not SQLite: %s", url)
             return None
-        # Write to temp file
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite")
         tmp.close()
         with open(tmp.name, "wb") as f:

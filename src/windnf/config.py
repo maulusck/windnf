@@ -1,4 +1,3 @@
-# config.py
 import configparser
 import logging
 from pathlib import Path
@@ -12,9 +11,6 @@ class Config:
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_path = self.config_dir / "windnf.conf"
 
-        # --------------------
-        # Default values
-        # --------------------
         self.log_level: str = "info"
         self.downloader: str = "powershell"
         self.skip_ssl_verify: bool = True

@@ -1,4 +1,3 @@
-# downloader.py
 from __future__ import annotations
 
 import logging
@@ -21,16 +20,10 @@ from .logger import is_dumb_terminal
 log = logging.getLogger(__name__)
 
 
-# -------------------------
-# Exceptions
-# -------------------------
 class DownloadError(RuntimeError):
     """Raised when a download fails for any reason."""
 
 
-# -------------------------
-# Downloader backend type
-# -------------------------
 class DownloaderType(Enum):
     POWERSHELL = "powershell"
     PYTHON = "python"
@@ -40,9 +33,6 @@ class DownloaderType(Enum):
         return value and value.lower() in (item.value for item in cls)
 
 
-# -------------------------
-# Downloader
-# -------------------------
 class Downloader:
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -81,9 +71,6 @@ class Downloader:
             self.session.mount("http://", adapter)
             self.session.mount("https://", adapter)
 
-    # -------------------------
-    # Public API
-    # -------------------------
     def download_to_file(self, url: str, output_path: Union[str, Path]) -> None:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,9 +97,6 @@ class Downloader:
         finally:
             Path(tmp.name).unlink(missing_ok=True)
 
-    # -------------------------
-    # Python backend
-    # -------------------------
     def _download_python_to_file(self, url: str, output_path: Path) -> None:
         assert self.session is not None
 
@@ -157,9 +141,6 @@ class Downloader:
         except Exception as exc:
             raise DownloadError(f"Download failed: {url}") from exc
 
-    # -------------------------
-    # PowerShell backend
-    # -------------------------
     def _powershell_script(self, url: str, output_path: Path, timeout: int) -> str:
         return rf"""
 $ErrorActionPreference = 'Stop'
