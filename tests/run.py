@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import io
 import os
 import shutil
@@ -7,189 +8,269 @@ from pathlib import Path
 
 from windnf import cli
 
-# -----------------------------------------------------------
-# Setup test directories
-# -----------------------------------------------------------
-SCRIPT_DIR = Path(__file__).parent.resolve()
-os.chdir(SCRIPT_DIR)
+# ===========================================================
+# ANSI colors
+# ===========================================================
+C_RESET = "\033[0m"
+C_RED = "\033[31m"
+C_GREEN = "\033[32m"
+C_YELLOW = "\033[33m"
+C_CYAN = "\033[36m"
+C_BOLD = "\033[1m"
 
-# Temporary download directory to avoid messing up the actual environment
-DOWNLOAD_DIR = SCRIPT_DIR / "downloads"
+# ===========================================================
+# Paths
+# ===========================================================
+ROOT = Path(__file__).parent.resolve()
+os.chdir(ROOT)
+
+RESULTS_FILE = ROOT / "tests.txt"
+DOWNLOAD_DIR = ROOT / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-# -----------------------------------------------------------
-# Repository definitions (CentOS 9 AppStream, BaseOS, EPEL9, and EPEL9 Source)
-# -----------------------------------------------------------
-REPO1_NAME = "centos9-appstream"
-REPO1_BASEURL = "https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/"
-REPOMD1_URL = f"{REPO1_BASEURL}repodata/repomd.xml"
-
-REPO2_NAME = "centos9-baseos"
-REPO2_BASEURL = "https://mirror.stream.centos.org/9-stream/BaseOS/x86_64/os/"
-REPOMD2_URL = f"{REPO2_BASEURL}repodata/repomd.xml"
-
-REPO3_NAME = "epel9"
-REPO3_BASEURL = "https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/"
-REPOMD3_URL = f"{REPO3_BASEURL}repodata/repomd.xml"
-
-REPO4_NAME = "epel9-source"
-REPO4_BASEURL = "https://dl.fedoraproject.org/pub/epel/9/Everything/source/tree/"
-REPOMD4_URL = f"{REPO4_BASEURL}repodata/repomd.xml"
+# ===========================================================
+# Counters
+# ===========================================================
+TOTAL = PASSED = FAILED = XFAILED = 0
+RESULT_LINES = []
+ABORTED = False
 
 
-# -----------------------------------------------------------
-# Helper to run CLI commands
-# -----------------------------------------------------------
-def run(*args):
-    """Run CLI command and capture stdout."""
-    print(f"\033[36m[CMD]\033[0m {' '.join(args)}")
+# ===========================================================
+# Helpers
+# ===========================================================
+def sep(char="="):
+    width = shutil.get_terminal_size().columns
+    print(char * (width - 1))
+
+
+def record(name, status):
+    RESULT_LINES.append(f"{name} -> {status}")
+
+
+def flush_results():
+    RESULTS_FILE.write_text("\n".join(RESULT_LINES) + "\n")
+
+
+def run(*args, expect=0):
+    """
+    Run a CLI command.
+    Always prints full output.
+    Ctrl+C safe.
+    """
+    global TOTAL, PASSED, FAILED, XFAILED, ABORTED
+    TOTAL += 1
+
+    name = " ".join(args)
+    print(f"\n{C_CYAN}{C_BOLD}[TEST]{C_RESET} {name}")
+    sep("-")
 
     buf = io.StringIO()
-    original_argv = sys.argv
+    exit_code = 0
+    old_argv = sys.argv
+
     try:
         sys.argv = ["windnf"] + list(args)
         with redirect_stdout(buf):
             cli.main()
+
+    except KeyboardInterrupt:
+        ABORTED = True
+        print(f"\n{C_YELLOW}{C_BOLD}⚠ ABORTED by user{C_RESET}")
+        raise
+
+    except SystemExit as e:
+        exit_code = e.code if isinstance(e.code, int) else 1
+
     finally:
-        sys.argv = original_argv
+        sys.argv = old_argv
 
-    out = buf.getvalue()
-    if out:
-        print(out)
+    output = buf.getvalue()
+    if output.strip():
+        print(output.rstrip())
 
-    # Force flush after the command to ensure terminal output consistency
-    sys.stdout.flush()  # This forces Python to flush its internal buffer
+    sep("-")
 
-    return out
+    if exit_code == expect:
+        if expect == 0:
+            PASSED += 1
+            record(name, "PASS")
+            print(f"{C_GREEN}{C_BOLD}✔ PASS{C_RESET}")
+        else:
+            XFAILED += 1
+            record(name, "XFAIL")
+            print(f"{C_YELLOW}{C_BOLD}✔ XFAIL{C_RESET}")
+    else:
+        FAILED += 1
+        record(name, "FAIL")
+        print(f"{C_RED}{C_BOLD}✘ FAIL{C_RESET} " f"(exit {exit_code}, expected {expect})")
+
+    sys.stdout.flush()
 
 
-# -----------------------------------------------------------
-# Print separator in red color with terminal width
-# -----------------------------------------------------------
-def print_separator():
-    terminal_width = shutil.get_terminal_size().columns
-    separator = "*" * (terminal_width - 1)  # Subtract 1 for terminal's edge
-    print(f"\033[31m{separator}\033[0m")  # Red separator
-
-
-# -----------------------------------------------------------
-# Main test execution
-# -----------------------------------------------------------
+# ===========================================================
+# Main test plan
+# ===========================================================
 def main():
-    print(f"Starting windnf test suite in {SCRIPT_DIR}...\n")
+    global ABORTED
+    RESULTS_FILE.write_text("")
 
-    # ====================================================
-    # REPOADD — Add CentOS 9 AppStream, BaseOS, EPEL9, and EPEL9 Source
-    # ====================================================
-    print_separator()
-    run("repoadd", REPO1_NAME, REPO1_BASEURL, "-m", REPOMD1_URL)
-    run("repoadd", REPO2_NAME, REPO2_BASEURL, "-m", REPOMD2_URL)
-    run("repoadd", REPO3_NAME, REPO3_BASEURL, "-m", REPOMD3_URL)
-    run("repoadd", REPO4_NAME, REPO4_BASEURL, "-t", "source", "-m", REPOMD4_URL)
+    print(f"{C_BOLD}windnf manual CLI test suite{C_RESET}")
+    print(f"Working dir: {ROOT}")
 
-    # Auto-link source repo at add time
-    run("repoadd", "linked-epel9", REPO3_BASEURL, "-m", REPOMD3_URL, "-s", REPO4_NAME)
+    try:
+        # ===================================================
+        # 1. CLI SANITY
+        # ===================================================
+        sep()
+        print(f"{C_BOLD}CLI SANITY{C_RESET}")
+        sep()
 
-    # ====================================================
-    # REPOLINK — Link the repositories
-    # ====================================================
-    print_separator()
-    run("repolink", REPO1_NAME, REPO4_NAME)  # AppStream → EPEL9 Source
-    run("repolink", REPO2_NAME, REPO4_NAME)  # BaseOS → EPEL9 Source
-    run("repolink", "notarepo", REPO4_NAME)  # Invalid repo link
+        run("--version")
+        run("--help", expect=0)
+        run("nosuchcommand", expect=2)
 
-    # ====================================================
-    # REPOLIST — List repositories
-    # ====================================================
-    print_separator()
-    run("repolist")
+        # ===================================================
+        # 2. REPOSITORY SETUP
+        # ===================================================
+        sep()
+        print(f"{C_BOLD}REPOSITORY SETUP{C_RESET}")
+        sep()
 
-    # ====================================================
-    # REPOSYNC — Sync the repositories
-    # ====================================================
-    print_separator()
-    run("reposync", REPO1_NAME)
-    run("reposync", REPO2_NAME)
-    run("reposync", REPO3_NAME)
-    run("reposync", REPO4_NAME)
-    run("reposync", "notarepo")  # Invalid repo sync
-    run("reposync", "-A")  # Sync all repositories
+        run(
+            "repoadd",
+            "centos9-baseos",
+            "https://mirror.stream.centos.org/9-stream/BaseOS/x86_64/os/",
+            "-m",
+            "repodata/repomd.xml",
+        )
 
-    # ====================================================
-    # SEARCH — Search for packages in repositories
-    # ====================================================
-    print_separator()
-    patterns = ["bash", "*ash", "bash*", "*bash*"]
-    for p in patterns:
-        run("search", p)
+        run(
+            "repoadd",
+            "centos9-appstream",
+            "https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/",
+            "-m",
+            "repodata/repomd.xml",
+        )
 
-    run("search", "bash", "--showduplicates")
-    run("search", "bash", "-r", REPO1_NAME)
-    run("search", "bash", "-r", REPO2_NAME)
-    run("search", "bash", "-r", REPO3_NAME)
-    run("search", "bash", "-r", REPO4_NAME)
-    run("search", "bash", "-r", "notarepo")  # Invalid repo search
+        run(
+            "repoadd",
+            "epel9",
+            "https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/",
+            "-m",
+            "repodata/repomd.xml",
+        )
 
-    # ====================================================
-    # INFO — Package information
-    # ====================================================
-    print_separator()
-    run("info", "bash")
-    run("info", "bash", "-r", REPO1_NAME)
-    run("info", "bash", "-r", REPO2_NAME)
-    run("info", "bash", "-r", REPO3_NAME)
-    run("info", "bash", "-r", REPO4_NAME)
-    run("info", "bash", "-r", "notarepo")  # Invalid repo info
+        run(
+            "repoadd",
+            "epel9-source",
+            "https://dl.fedoraproject.org/pub/epel/9/Everything/source/tree/",
+            "-t",
+            "source",
+            "-m",
+            "repodata/repomd.xml",
+        )
 
-    # ====================================================
-    # RESOLVE — Dependency resolution
-    # ====================================================
-    print_separator()
-    run("resolve", "vlc")
-    run("resolve", "vlc", "-R")  # Recursive resolution
-    run("resolve", "vlc", "-w")  # Weak dependencies
-    run("resolve", "vlc", "--arch", "x86_64")
-    run("resolve", "vlc", "--arch", "arm64")
-    run("resolve", "vlc", "-r", REPO1_NAME)
-    run("resolve", "vlc", "-r", REPO2_NAME)
-    run("resolve", "vlc", "-r", REPO3_NAME)
-    run("resolve", "vlc", "-r", REPO4_NAME)
-    run("resolve", "vlc", "-r", "notarepo")  # Invalid repo resolve
+        # ===================================================
+        # 3. REPOLIST / REPOLINK
+        # ===================================================
+        sep()
+        print(f"{C_BOLD}REPO INSPECTION{C_RESET}")
+        sep()
 
-    # ====================================================
-    # DOWNLOAD — Download packages, SRPMs, dependencies
-    # ====================================================
-    print_separator()
-    run("download", "vlc", "--urls")
-    run("download", "vlc-plugin*", "--urls")
-    run("download", "vlc", "-x", str(DOWNLOAD_DIR), "--urls")
-    run("download", "vlc", "--resolve", "-x", str(DOWNLOAD_DIR), "--urls")
-    run("download", "vlc", "-S", "-x", str(DOWNLOAD_DIR), "--urls")
-    run("download", "bash", "-S", "-x", str(DOWNLOAD_DIR), "--urls")
-    run("download", "vlc", "--arch", "x86_64", "-x", str(DOWNLOAD_DIR), "--urls")
-    run("download", "vlc", "-r", REPO1_NAME, "-x", str(DOWNLOAD_DIR), "--urls")
-    run("download", "vlc", "-r", REPO2_NAME, "-S", "-x", str(DOWNLOAD_DIR), "--urls")
+        run("repolist")
+        run("repolink", "centos9-appstream", "epel9-source")
+        run("repolink", "nosuchrepo", "epel9-source", expect=1)
 
-    # ====================================================
-    # REPODEL — Remove repositories
-    # ====================================================
-    print_separator()
-    run("repodel", REPO1_NAME, "-f")
-    run("repodel", REPO2_NAME, "-f")
-    run("repodel", REPO3_NAME, "-f")
-    run("repodel", REPO4_NAME, "-f")
-    run("repodel", "linked-epel9", "-f")
-    run("repolist")  # Confirm deletion
+        # ===================================================
+        # 4. METADATA SYNC
+        # ===================================================
+        sep()
+        print(f"{C_BOLD}METADATA SYNC{C_RESET}")
+        sep()
 
-    # Re-add repos and delete all
-    run("repoadd", REPO1_NAME, REPO1_BASEURL, "-m", REPOMD1_URL)
-    run("repoadd", REPO2_NAME, REPO2_BASEURL, "-m", REPOMD2_URL)
-    run("repoadd", REPO3_NAME, REPO3_BASEURL, "-m", REPOMD3_URL)
-    run("repoadd", REPO4_NAME, REPO4_BASEURL, "-t", "source", "-m", REPOMD4_URL)
-    run("repodel", "-A", "-f")
-    run("repolist")  # Confirm deletion
+        run("reposync", "-A")
+        run("reposync", "nosuchrepo", expect=1)
 
-    print("\033[32mTest suite complete!\033[0m")
+        # ===================================================
+        # 5. PACKAGE QUERIES
+        # ===================================================
+        sep()
+        print(f"{C_BOLD}PACKAGE QUERIES{C_RESET}")
+        sep()
+
+        run("search", "bash")
+        run("search", "bash", "--repo", "centos9-baseos")
+        run("info", "bash")
+        run("info", "bash", "--repo", "centos9-baseos")
+        run("info", "nosuchpackage", expect=1)
+
+        # ===================================================
+        # 6. DEPENDENCY RESOLUTION
+        # ===================================================
+        sep()
+        print(f"{C_BOLD}DEPENDENCY RESOLUTION{C_RESET}")
+        sep()
+
+        run("resolve", "bash")
+        run("resolve", "bash", "--recursive")
+        run("resolve", "bash", "--recursive", "2")
+        run("resolve", "bash", "--weakdeps")
+        run("resolve", "nosuchpackage", expect=1)
+
+        # ===================================================
+        # 7. DOWNLOADS
+        # ===================================================
+        sep()
+        print(f"{C_BOLD}DOWNLOADS{C_RESET}")
+        sep()
+
+        run("download", "bash", "--destdir", str(DOWNLOAD_DIR))
+        run("download", "bash", "--urls")
+        run("download", "bash", "--resolve")
+        run("download", "bash", "--recurse", "1")
+        run("download", "bash", "--source")
+        run("download", "nosuchpackage", expect=1)
+
+        # ===================================================
+        # 8. DESTRUCTIVE OPS (LAST)
+        # ===================================================
+        sep()
+        print(f"{C_BOLD}REPO DELETION{C_RESET}")
+        sep()
+
+        run("repodel", "epel9-source")
+        run("repodel", "epel9", "--force")
+        run("repodel", "--all", "--force")
+
+    except KeyboardInterrupt:
+        pass
+
+    finally:
+        sep("=")
+        flush_results()
+
+        status = (
+            f"{C_YELLOW}ABORTED{C_RESET}"
+            if ABORTED
+            else f"{C_RED}FAILED{C_RESET}" if FAILED else f"{C_GREEN}PASSED{C_RESET}"
+        )
+
+        print(
+            f"\n{C_BOLD}Summary:{C_RESET} "
+            f"{C_GREEN}{PASSED} passed{C_RESET}, "
+            f"{C_YELLOW}{XFAILED} xfail{C_RESET}, "
+            f"{C_RED}{FAILED} failed{C_RESET}, "
+            f"{TOTAL} total"
+        )
+
+        print(f"Status: {status}")
+        print(f"Recap written to {RESULTS_FILE}")
+
+        if ABORTED:
+            sys.exit(130)
+        if FAILED:
+            sys.exit(1)
 
 
 if __name__ == "__main__":
