@@ -115,7 +115,7 @@ def main() -> None:
         # ------------------------
 
         # resolve / rv
-        p_resolve = subparsers.add_parser("resolve", aliases=["rv"], help="Resolve dependency sets")
+        p_resolve = subparsers.add_parser("resolve", aliases=["rv", "deplist"], help="Resolve dependency sets")
         p_resolve.add_argument("packages", nargs="+")
         p_resolve.add_argument("--repo", "--repoid", "-r", nargs="*", help="Repository names")
         p_resolve.add_argument("--weakdeps", "-w", action="store_true")

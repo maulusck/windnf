@@ -1,4 +1,3 @@
-# operations.py
 from __future__ import annotations
 
 import fnmatch
@@ -30,7 +29,6 @@ class Operations:
             config.downloader,
         )
 
-    # --- Utilities ---
     def highlight_match(self, text: str, pattern: str) -> str:
         if not pattern:
             return text
@@ -61,7 +59,6 @@ class Operations:
             out.append(int(repo["id"]))
         return out
 
-    # --- Repository Operations ---
     def repoadd(
         self, name: str, baseurl: str, repomd: str, repo_type: str, source_repo: Optional[str], sync: bool
     ) -> None:
@@ -174,7 +171,6 @@ class Operations:
             else:
                 log.info("Skipped deletion of repository '%s'", name)
 
-    # --- Package Search / Info ---
     def search(self, patterns: List[str], repo: Optional[List[str]] = None, showduplicates: bool = False) -> None:
         repo_ids = self._resolve_repo_names_to_ids(repo) if repo else None
         all_results: List[Dict[str, Any]] = []
@@ -190,7 +186,6 @@ class Operations:
             log.info("No packages matched any patterns.")
             return
 
-        # Filter duplicates if needed
         if not showduplicates:
             latest_per_name: Dict[str, Dict[str, Any]] = {}
             for r in all_results:
@@ -202,7 +197,6 @@ class Operations:
         else:
             results = all_results
 
-        # Precompute lowercase & NEVRA for highlights
         for r in results:
             r["_name_lc"] = r.get("name", "").lower()
             r["_summary_lc"] = r.get("summary", "").lower()
@@ -275,7 +269,6 @@ class Operations:
             print(f" URL: {best_row.get('url') or ''}")
             self.print_delimiter()
 
-    # --- Dependency Resolver ---
     def _resolve_dependencies(
         self,
         packages: List[str],
@@ -284,85 +277,89 @@ class Operations:
         recursive: Optional[int] = None,
         arch: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Internal method: resolves package dependencies. Does NOT print anything."""
-        repo_ids = self._resolve_repo_names_to_ids(repo) if repo else None
-        to_resolve: List[Dict[str, Any]] = []
 
+        repo_ids = self._resolve_repo_names_to_ids(repo) if repo else None
+
+        roots: List[Dict[str, Any]] = []
         for pat in packages:
             rows = self.db.search_packages(pat, repo_filter=repo_ids, exact=True)
-            if not rows:
-                continue
-            best_row = max(rows, key=lambda r: NEVRA.from_row(r))
-            to_resolve.append(best_row)
+            if rows:
+                roots.append(max(rows, key=lambda r: NEVRA.from_row(r)))
 
-        if not to_resolve:
-            return {"resolved_rows": [], "dep_map": {}, "unsatisfied": set()}
+        if not roots:
+            return {
+                "roots": [],
+                "packages": {},
+                "deplist": {},
+                "levels": {},
+                "unsatisfied": set(),
+            }
 
         provides_map = self.db.provides_map(repo_filter=repo_ids)
         requires_map = self.db.requires_map()
 
-        resolved_keys: Set[int] = set()
-        dep_map: Dict[int, List[Dict[str, Any]]] = {}
-        unsatisfied_dependencies: Set[str] = set()
+        packages_map: Dict[int, Dict[str, Any]] = {}
+        deplist: Dict[int, List[Dict[str, Any]]] = {}
+        levels: Dict[int, int] = {}
+        unsatisfied: Set[str] = set()
 
-        # stack entries: (pkg_row, remaining_depth)
-        stack: List[tuple[Dict[str, Any], Optional[int]]] = []
-
-        for row in to_resolve:
-            stack.append((row, recursive))
+        stack: List[tuple[Dict[str, Any], Optional[int], int]] = []
+        for r in roots:
+            stack.append((r, recursive, 0))
 
         while stack:
-            pkg_row, depth = stack.pop()
+            pkg_row, depth, level = stack.pop()
             pkgKey = pkg_row["pkgKey"]
 
-            if pkgKey in resolved_keys:
+            if pkgKey in packages_map:
                 continue
-            resolved_keys.add(pkgKey)
 
-            dep_map[pkgKey] = []
+            packages_map[pkgKey] = pkg_row
+            levels[pkgKey] = level
+            deplist[pkgKey] = []
 
-            # depth == 0 → do not expand deps
             if depth == 0:
                 continue
 
-            reqs = requires_map.get(pkgKey, [])
-
-            for r in reqs:
-                req_name = r["name"]
-                provider_keys = provides_map.get(req_name, set())
+            for req in sorted(requires_map.get(pkgKey, []), key=lambda r: r["name"]):
+                cap = req["name"]
+                provider_keys = provides_map.get(cap)
 
                 if not provider_keys:
-                    unsatisfied_dependencies.add(req_name)
+                    unsatisfied.add(cap)
                     continue
 
                 providers: List[Dict[str, Any]] = []
-                for pKey in provider_keys:
-                    prov_row = self.db.get_by_key(pKey, repo_filter=repo_ids)
-                    if prov_row:
-                        providers.append(prov_row)
+                for pkey in provider_keys:
+                    prow = self.db.get_by_key(pkey, repo_filter=repo_ids)
+                    if prow:
+                        providers.append(prow)
 
                 if not providers:
-                    unsatisfied_dependencies.add(req_name)
+                    unsatisfied.add(cap)
                     continue
 
-                best = max(providers, key=lambda r: NEVRA.from_row(r))
-                dep_map[pkgKey].append(best)
+                providers.sort(key=lambda r: NEVRA.from_row(r), reverse=True)
+                chosen = providers[0]
+
+                deplist[pkgKey].append(
+                    {
+                        "require": cap,
+                        "providers": providers,
+                        "chosen": chosen,
+                    }
+                )
 
                 if recursive is not None:
-                    if best["pkgKey"] not in resolved_keys:
-                        if depth is None or depth < 0:
-                            next_depth = -1
-                        else:
-                            next_depth = depth - 1
-                        stack.append((best, next_depth))
-
-        resolved_rows = [self.db.get_by_key(k, repo_filter=repo_ids) for k in resolved_keys]
-        resolved_rows = [r for r in resolved_rows if r is not None]
+                    next_depth = None if depth is None or depth < 0 else depth - 1
+                    stack.append((chosen, next_depth, level + 1))
 
         return {
-            "resolved_rows": resolved_rows,
-            "dep_map": dep_map,
-            "unsatisfied": unsatisfied_dependencies,
+            "roots": [r["pkgKey"] for r in roots],
+            "packages": packages_map,
+            "deplist": deplist,
+            "levels": levels,
+            "unsatisfied": unsatisfied,
         }
 
     def resolve(
@@ -374,49 +371,61 @@ class Operations:
         arch: Optional[str] = None,
         verbose: bool = False,
     ) -> None:
-        result = self._resolve_dependencies(packages, repo, weakdeps, recursive, arch)
-        resolved = result["resolved_rows"]
-        dep_map = result["dep_map"]
-        unsatisfied = result["unsatisfied"]
-        if not resolved:
+
+        res = self._resolve_dependencies(packages, repo, weakdeps, recursive, arch)
+
+        if not res["roots"]:
             log.info("No packages resolved.")
             return
-        printed_keys: Set[int] = set()
-        printed_unsatisfied: Set[str] = set()
-        requires_map = self.db.requires_map()
-        for pkg_row in resolved:
-            pkgKey = pkg_row["pkgKey"]
-            pkg_nevra = NEVRA.from_row(pkg_row)
-            deps = dep_map.get(pkgKey, [])
-            satisfied = {dep["name"] for dep in deps}
-            all_reqs = {r["name"] for r in requires_map.get(pkgKey, [])}
-            unsat_for_pkg = all_reqs - satisfied
-            if verbose:
-                self.print_delimiter()
-                print(f"Package: {pkg_nevra}")
-                if deps:
-                    print("Requires:")
-                    for dep_row in deps:
-                        dep_nevra = NEVRA.from_row(dep_row)
-                        print(f"  - {dep_row['name']} provided by {dep_nevra}")
-                elif not unsat_for_pkg:
-                    print("Requires: <no dependencies>")
-                if unsat_for_pkg:
-                    for u in sorted(unsat_for_pkg):
-                        log.warning("(unsatisfied) %s required by %s", u, pkg_nevra)
-                        printed_unsatisfied.add(u)
-            else:
-                printed_unsatisfied.update(unsat_for_pkg)
-            for dep_row in deps:
-                depKey = dep_row["pkgKey"]
-                if depKey not in printed_keys:
-                    if not verbose:
-                        print(f"- {NEVRA.from_row(dep_row)}")
-                    printed_keys.add(depKey)
-        if not verbose and printed_unsatisfied:
-            log.warning("unsatisfied dependencies: %s", ", ".join(sorted(printed_unsatisfied)))
 
-    # --- Download Packages ---
+        pkgs = res["packages"]
+        deplist = res["deplist"]
+        levels = res["levels"]
+
+        if recursive is not None:
+            log.info(
+                f"{Colors.FG_BRIGHT_MAGENTA}{Colors.DIM}(note: recursive deplist is a windnf extension){Colors.RESET}\n"
+            )
+
+        for root_key in res["roots"]:
+            root = pkgs[root_key]
+            log.info(f"package: {Colors.FG_BRIGHT_CYAN}{Colors.BOLD}{NEVRA.from_row(root)}{Colors.RESET}")
+
+            deps = deplist.get(root_key, [])
+            if not deps:
+                log.info(f" {Colors.DIM}<no dependencies>{Colors.RESET}\n")
+                continue
+
+            for dep in deps:
+                log.info(f" dependency: {Colors.FG_YELLOW}{dep['require']}{Colors.RESET}")
+                for prov in dep["providers"]:
+                    log.info(f"  provider: {Colors.FG_GREEN}{NEVRA.from_row(prov)}{Colors.RESET}")
+                    if verbose:
+                        repo_row = self.db.get_repo(prov["repo_id"])
+                        if repo_row:
+                            log.info(f"   repo: {Colors.DIM}{repo_row['name']}{Colors.RESET}")
+            log.info("")
+
+        if recursive is not None:
+            for pkgKey, lvl in sorted(levels.items(), key=lambda x: x[1]):
+                if lvl == 0:
+                    continue
+                pkg = pkgs[pkgKey]
+                log.info(f"{Colors.FG_BRIGHT_MAGENTA}{Colors.DIM}[level {lvl}]{Colors.RESET}")
+                log.info(f"package: {Colors.FG_BRIGHT_CYAN}{Colors.BOLD}{NEVRA.from_row(pkg)}{Colors.RESET}")
+                for dep in deplist.get(pkgKey, []):
+                    log.info(f" dependency: {Colors.FG_YELLOW}{dep['require']}{Colors.RESET}")
+                    for prov in dep["providers"]:
+                        log.info(f"  provider: {Colors.FG_GREEN}{NEVRA.from_row(prov)}{Colors.RESET}")
+                        if verbose:
+                            repo_row = self.db.get_repo(prov["repo_id"])
+                            if repo_row:
+                                log.info(f"   repo: {Colors.DIM}{repo_row['name']}{Colors.RESET}")
+                log.info("")
+
+        if res["unsatisfied"]:
+            log.warning("unsatisfied dependencies: %s", ", ".join(sorted(res["unsatisfied"])))
+
     def download(
         self,
         packages: List[str],
@@ -429,57 +438,73 @@ class Operations:
         urls: bool = False,
         arch: Optional[str] = None,
     ) -> None:
-        if resolve_flag or recurse:
-            result = self._resolve_dependencies(packages, repo=repo, weakdeps=False, recursive=recurse, arch=arch)
-            resolved_rows = result["resolved_rows"]
-            dep_map = result["dep_map"]
-            if not resolved_rows:
+
+        repo_ids = self._resolve_repo_names_to_ids(repo) if repo else None
+        targets: Dict[int, Dict[str, Any]] = {}
+
+        if resolve_flag or recurse is not None:
+            res = self._resolve_dependencies(
+                packages,
+                repo=repo,
+                weakdeps=False,
+                recursive=recurse,
+                arch=arch,
+            )
+
+            if not res["roots"]:
                 log.info("No packages matched the patterns or dependencies.")
                 return
 
-            targets: Dict[int, Dict[str, Any]] = {r["pkgKey"]: r for r in resolved_rows}
-            for deps in dep_map.values():
-                for dep_row in deps:
-                    targets[dep_row["pkgKey"]] = dep_row
-            targets_list = list(targets.values())
+            for key in res["roots"]:
+                targets[key] = res["packages"][key]
+
+            for dep_entries in res["deplist"].values():
+                for dep in dep_entries:
+                    chosen = dep["chosen"]
+                    targets[chosen["pkgKey"]] = chosen
+
         else:
-            targets_list = []
-            repo_ids = self._resolve_repo_names_to_ids(repo)
-            for p in packages:
-                try:
-                    nv = NEVRA.parse(p)
-                except Exception:
-                    nv = None
-                rows = self.db.search_packages(str(nv) if nv else p, repo_filter=repo_ids, exact=True)
+            for pat in packages:
+                rows = self.db.search_packages(pat, repo_filter=repo_ids, exact=True)
                 if not rows:
-                    log.warning("No match found for package: %s", p)
+                    log.warning("No match found for package: %s", pat)
                     continue
                 best = max(rows, key=lambda r: NEVRA.from_row(r))
-                targets_list.append(best)
+                targets[best["pkgKey"]] = best
 
-        if not targets_list:
+        if not targets:
             log.info("No packages selected for download.")
             return
 
+        target_rows = sorted(
+            targets.values(),
+            key=lambda r: NEVRA.from_row(r),
+        )
+
         download_dir = Path(downloaddir) if downloaddir else self.cfg.download_path
         download_dir.mkdir(parents=True, exist_ok=True)
+
         dest_dir = Path(destdir) if destdir else None
         if dest_dir:
             dest_dir.mkdir(parents=True, exist_ok=True)
 
         def build_urls_for_row(row: Dict[str, Any]) -> List[str]:
             urls_list: List[str] = []
+
             lb = row.get("location_base") or row.get("locationbase") or row.get("location_base_url")
             lh = row.get("location_href") or row.get("locationhref") or row.get("href")
+
             if lb and lh:
                 urls_list.append(f"{lb.rstrip('/')}/{lh.lstrip('/')}")
-            repo_row = self.db.get_repo(int(row["repo_id"]))
+
+            repo_row = self.db.get_repo(int(row["repo_id"])) if row.get("repo_id") else None
             if repo_row and lh:
                 urls_list.append(f"{repo_row['base_url'].rstrip('/')}/{lh.lstrip('/')}")
+
             return urls_list
 
         if urls:
-            for row in targets_list:
+            for row in target_rows:
                 nevra = NEVRA.from_row(row)
                 ulist = build_urls_for_row(row)
                 if not ulist:
@@ -489,21 +514,27 @@ class Operations:
                         print(u)
             return
 
-        for row in targets_list:
-            nevra = NEVRA.from_row(row)
-            candidates = [row]
+        for row in target_rows:
+            candidates: List[Dict[str, Any]] = [row]
+
             if source and row.get("rpm_sourcerpm"):
-                src_rows = self.db.search_packages(row["rpm_sourcerpm"], repo_filter=None, exact=True)
+                src_rows = self.db.search_packages(
+                    row["rpm_sourcerpm"],
+                    repo_filter=None,
+                    exact=True,
+                )
                 candidates.extend(src_rows)
 
             for pkg_row in candidates:
+                nevra = NEVRA.from_row(pkg_row)
                 urls_list = build_urls_for_row(pkg_row)
+
                 if not urls_list:
-                    log.warning("Skipping %s: no URL available", NEVRA.from_row(pkg_row))
+                    log.warning("Skipping %s: no URL available", nevra)
                     continue
 
                 url = urls_list[0]
-                filename = url.split("/")[-1] or f"{NEVRA.from_row(pkg_row).to_nvra()}.rpm"
+                filename = url.split("/")[-1] or f"{nevra.to_nvra()}.rpm"
                 outpath = download_dir / filename
 
                 try:
@@ -513,16 +544,13 @@ class Operations:
                         data = self.downloader.download_to_memory(url)
                         with open(outpath, "wb") as fh:
                             fh.write(data)
-                    log.info("Downloaded %s -> %s", NEVRA.from_row(pkg_row), outpath)
+
+                    log.info("Downloaded %s -> %s", nevra, outpath)
 
                     if dest_dir:
                         final = dest_dir / filename
-                        try:
-                            import shutil
+                        shutil.copy2(outpath, final)
+                        log.info("Copied to %s", final)
 
-                            shutil.copy2(outpath, final)
-                            log.info("Copied to %s", final)
-                        except Exception as e:
-                            log.error("Failed to copy %s: %s", final, e)
                 except Exception as e:
-                    log.exception("Download failed for %s: %s", NEVRA.from_row(pkg_row), e)
+                    log.exception("Download failed for %s: %s", nevra, e)
