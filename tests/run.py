@@ -1,277 +1,241 @@
 #!/usr/bin/env python3
+"""Comprehensive CLI parser/dispatch tests for windnf.
+
+This suite validates all commands and aliases exposed in ``src/windnf/cli.py``
+without touching network, filesystem config, or real database state.
+"""
+
+from __future__ import annotations
+
+import contextlib
 import io
-import os
-import shutil
 import sys
-from contextlib import redirect_stdout
+import unittest
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+from unittest.mock import patch
 
-from windnf import cli
+# Ensure local package imports resolve when run as: python3 tests/run.py
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-# ===========================================================
-# ANSI colors
-# ===========================================================
-C_RESET = "\033[0m"
-C_RED = "\033[31m"
-C_GREEN = "\033[32m"
-C_YELLOW = "\033[33m"
-C_CYAN = "\033[36m"
-C_BOLD = "\033[1m"
-
-# ===========================================================
-# Paths
-# ===========================================================
-ROOT = Path(__file__).parent.resolve()
-os.chdir(ROOT)
-
-RESULTS_FILE = ROOT / "tests.txt"
-DOWNLOAD_DIR = ROOT / "downloads"
-DOWNLOAD_DIR.mkdir(exist_ok=True)
-
-# ===========================================================
-# Counters
-# ===========================================================
-TOTAL = PASSED = FAILED = XFAILED = 0
-RESULT_LINES = []
-ABORTED = False
+from windnf import cli  # noqa: E402
 
 
-# ===========================================================
-# Helpers
-# ===========================================================
-def sep(char="="):
-    width = shutil.get_terminal_size().columns
-    print(char * (width - 1))
+class FakeConfig:
+    """Minimal config object required by CLI startup."""
+
+    def __init__(self) -> None:
+        self.log_level = "info"
+        self.downloader = "python"
+        self.skip_ssl_verify = False
 
 
-def record(name, status):
-    RESULT_LINES.append(f"{name} -> {status}")
+class FakeOperations:
+    """Operation sink that records which command was dispatched."""
 
+    last_call: Optional[Tuple[str, Dict[str, Any]]] = None
 
-def flush_results():
-    RESULTS_FILE.write_text("\n".join(RESULT_LINES) + "\n")
-
-
-def run(*args, expect=0):
-    """
-    Run a CLI command.
-    Always prints full output.
-    Ctrl+C safe.
-    """
-    global TOTAL, PASSED, FAILED, XFAILED, ABORTED
-    TOTAL += 1
-
-    name = " ".join(args)
-    print(f"\n{C_CYAN}{C_BOLD}[TEST]{C_RESET} {name}")
-    sep("-")
-
-    buf = io.StringIO()
-    exit_code = 0
-    old_argv = sys.argv
-
-    try:
-        sys.argv = ["windnf"] + list(args)
-        with redirect_stdout(buf):
-            cli.main()
-
-    except KeyboardInterrupt:
-        ABORTED = True
-        print(f"\n{C_YELLOW}{C_BOLD}⚠ ABORTED by user{C_RESET}")
-        raise
-
-    except SystemExit as e:
-        exit_code = e.code if isinstance(e.code, int) else 1
-
-    finally:
-        sys.argv = old_argv
-
-    output = buf.getvalue()
-    if output.strip():
-        print(output.rstrip())
-
-    sep("-")
-
-    if exit_code == expect:
-        if expect == 0:
-            PASSED += 1
-            record(name, "PASS")
-            print(f"{C_GREEN}{C_BOLD}✔ PASS{C_RESET}")
-        else:
-            XFAILED += 1
-            record(name, "XFAIL")
-            print(f"{C_YELLOW}{C_BOLD}✔ XFAIL{C_RESET}")
-    else:
-        FAILED += 1
-        record(name, "FAIL")
-        print(f"{C_RED}{C_BOLD}✘ FAIL{C_RESET} " f"(exit {exit_code}, expected {expect})")
-
-    sys.stdout.flush()
-
-
-# ===========================================================
-# Main test plan
-# ===========================================================
-def main():
-    global ABORTED
-    RESULTS_FILE.write_text("")
-
-    print(f"{C_BOLD}windnf manual CLI test suite{C_RESET}")
-    print(f"Working dir: {ROOT}")
-
-    try:
-        # ===================================================
-        # 1. CLI SANITY
-        # ===================================================
-        sep()
-        print(f"{C_BOLD}CLI SANITY{C_RESET}")
-        sep()
-
-        run("--version")
-        run("--help", expect=0)
-        run("nosuchcommand", expect=2)
-
-        # ===================================================
-        # 2. REPOSITORY SETUP
-        # ===================================================
-        sep()
-        print(f"{C_BOLD}REPOSITORY SETUP{C_RESET}")
-        sep()
-
-        run(
-            "repoadd",
-            "centos9-baseos",
-            "https://mirror.stream.centos.org/9-stream/BaseOS/x86_64/os/",
-            "-m",
-            "repodata/repomd.xml",
-        )
-
-        run(
-            "repoadd",
-            "centos9-appstream",
-            "https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/",
-            "-m",
-            "repodata/repomd.xml",
-        )
-
-        run(
-            "repoadd",
-            "epel9",
-            "https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/",
-            "-m",
-            "repodata/repomd.xml",
-        )
-
-        run(
-            "repoadd",
-            "epel9-source",
-            "https://dl.fedoraproject.org/pub/epel/9/Everything/source/tree/",
-            "-t",
-            "source",
-            "-m",
-            "repodata/repomd.xml",
-        )
-
-        # ===================================================
-        # 3. REPOLIST / REPOLINK
-        # ===================================================
-        sep()
-        print(f"{C_BOLD}REPO INSPECTION{C_RESET}")
-        sep()
-
-        run("repolist")
-        run("repolink", "centos9-appstream", "epel9-source")
-        run("repolink", "nosuchrepo", "epel9-source", expect=1)
-
-        # ===================================================
-        # 4. METADATA SYNC
-        # ===================================================
-        sep()
-        print(f"{C_BOLD}METADATA SYNC{C_RESET}")
-        sep()
-
-        run("reposync", "-A")
-        run("reposync", "nosuchrepo", expect=1)
-
-        # ===================================================
-        # 5. PACKAGE QUERIES
-        # ===================================================
-        sep()
-        print(f"{C_BOLD}PACKAGE QUERIES{C_RESET}")
-        sep()
-
-        run("search", "bash")
-        run("search", "bash", "--repo", "centos9-baseos")
-        run("info", "bash")
-        run("info", "bash", "--repo", "centos9-baseos")
-        run("info", "nosuchpackage", expect=1)
-
-        # ===================================================
-        # 6. DEPENDENCY RESOLUTION
-        # ===================================================
-        sep()
-        print(f"{C_BOLD}DEPENDENCY RESOLUTION{C_RESET}")
-        sep()
-
-        run("resolve", "bash")
-        run("resolve", "bash", "--recursive")
-        run("resolve", "bash", "--recursive", "2")
-        run("resolve", "bash", "--weakdeps")
-        run("resolve", "nosuchpackage", expect=1)
-
-        # ===================================================
-        # 7. DOWNLOADS
-        # ===================================================
-        sep()
-        print(f"{C_BOLD}DOWNLOADS{C_RESET}")
-        sep()
-
-        run("download", "bash", "--destdir", str(DOWNLOAD_DIR))
-        run("download", "bash", "--urls")
-        run("download", "bash", "--resolve")
-        run("download", "bash", "--recurse", "1")
-        run("download", "bash", "--source")
-        run("download", "nosuchpackage", expect=1)
-
-        # ===================================================
-        # 8. DESTRUCTIVE OPS (LAST)
-        # ===================================================
-        sep()
-        print(f"{C_BOLD}REPO DELETION{C_RESET}")
-        sep()
-
-        run("repodel", "epel9-source")
-        run("repodel", "epel9", "--force")
-        run("repodel", "--all", "--force")
-
-    except KeyboardInterrupt:
+    def __init__(self, _config: FakeConfig) -> None:
         pass
 
-    finally:
-        sep("=")
-        flush_results()
+    @classmethod
+    def _record(cls, name: str, kwargs: Dict[str, Any]) -> None:
+        cls.last_call = (name, kwargs)
 
-        status = (
-            f"{C_YELLOW}ABORTED{C_RESET}"
-            if ABORTED
-            else f"{C_RED}FAILED{C_RESET}" if FAILED else f"{C_GREEN}PASSED{C_RESET}"
-        )
+    def repoadd(self, **kwargs: Any) -> None:
+        self._record("repoadd", kwargs)
 
-        print(
-            f"\n{C_BOLD}Summary:{C_RESET} "
-            f"{C_GREEN}{PASSED} passed{C_RESET}, "
-            f"{C_YELLOW}{XFAILED} xfail{C_RESET}, "
-            f"{C_RED}{FAILED} failed{C_RESET}, "
-            f"{TOTAL} total"
-        )
+    def repolink(self, **kwargs: Any) -> None:
+        self._record("repolink", kwargs)
 
-        print(f"Status: {status}")
-        print(f"Recap written to {RESULTS_FILE}")
+    def repolist(self, **kwargs: Any) -> None:
+        self._record("repolist", kwargs)
 
-        if ABORTED:
-            sys.exit(130)
-        if FAILED:
-            sys.exit(1)
+    def reposync(self, **kwargs: Any) -> None:
+        self._record("reposync", kwargs)
+
+    def repodel(self, **kwargs: Any) -> None:
+        self._record("repodel", kwargs)
+
+    def search(self, **kwargs: Any) -> None:
+        self._record("search", kwargs)
+
+    def info(self, **kwargs: Any) -> None:
+        self._record("info", kwargs)
+
+    def resolve(self, **kwargs: Any) -> None:
+        self._record("resolve", kwargs)
+
+    def download(self, **kwargs: Any) -> None:
+        self._record("download", kwargs)
+
+
+@contextlib.contextmanager
+def cli_patches() -> Iterable[None]:
+    """Patch side-effectful CLI collaborators for deterministic tests."""
+
+    with patch.object(cli, "Config", FakeConfig), patch.object(cli, "Operations", FakeOperations), patch.object(
+        cli, "setup_logger", lambda level: None
+    ), patch.object(cli, "is_dumb_terminal", lambda: True):
+        yield
+
+
+def invoke(args: List[str]) -> Tuple[int, str, Optional[Dict[str, Any]]]:
+    """Invoke CLI with args and return (exit_code, command_name, kwargs)."""
+
+    FakeOperations.last_call = None
+
+    with cli_patches(), patch.object(sys, "argv", ["windnf", *args]):
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+            try:
+                cli.main()
+            except SystemExit as exc:
+                code = int(exc.code) if isinstance(exc.code, int) else 1
+            else:
+                code = 0
+
+    if FakeOperations.last_call is None:
+        return code, "", None
+
+    name, kwargs = FakeOperations.last_call
+    return code, name, kwargs
+
+
+class TestCliTopLevel(unittest.TestCase):
+    def test_version(self) -> None:
+        code, name, kwargs = invoke(["--version"])
+        self.assertEqual(code, 0)
+        self.assertEqual(name, "")
+        self.assertIsNone(kwargs)
+
+    def test_help(self) -> None:
+        code, name, kwargs = invoke(["--help"])
+        self.assertEqual(code, 0)
+        self.assertEqual(name, "")
+        self.assertIsNone(kwargs)
+
+    def test_invalid_command(self) -> None:
+        code, name, kwargs = invoke(["nosuchcommand"])
+        self.assertEqual(code, 2)
+        self.assertEqual(name, "")
+        self.assertIsNone(kwargs)
+
+
+class TestCliDispatchMatrix(unittest.TestCase):
+    def _assert_case(
+        self,
+        args: List[str],
+        expected_command: str,
+        expected_subset: Optional[Dict[str, Any]] = None,
+        expected_code: int = 0,
+    ) -> None:
+        code, cmd, kwargs = invoke(args)
+        self.assertEqual(code, expected_code, msg=f"unexpected exit for args={args!r}")
+        self.assertEqual(cmd, expected_command, msg=f"unexpected command for args={args!r}")
+        self.assertIsNotNone(kwargs)
+
+        if kwargs is None:
+            return
+
+        for key, value in (expected_subset or {}).items():
+            self.assertEqual(kwargs.get(key), value, msg=f"args={args!r}, key={key!r}")
+
+    def test_repo_commands(self) -> None:
+        cases = [
+            (["repoadd", "base", "https://example.invalid/base"], "repoadd", {"repo_type": "binary", "sync": False}),
+            (
+                [
+                    "ra",
+                    "src",
+                    "https://example.invalid/src",
+                    "-m",
+                    "repodata/repomd.xml",
+                    "-t",
+                    "source",
+                    "-s",
+                    "base",
+                    "-S",
+                ],
+                "repoadd",
+                {"repo_type": "source", "source_repo": "base", "sync": True},
+            ),
+            (["repolink", "base", "src"], "repolink", {"binary_repo": "base", "source_repo": "src"}),
+            (["rlk", "base", "src"], "repolink", {"binary_repo": "base", "source_repo": "src"}),
+            (["repolist"], "repolist", {}),
+            (["rl"], "repolist", {}),
+            (["reposync", "base", "src"], "reposync", {"names": ["base", "src"], "all_": False}),
+            (["rs", "-A"], "reposync", {"names": [], "all_": True}),
+            (["repodel", "base", "src", "-f"], "repodel", {"names": ["base", "src"], "force": True}),
+            (["rd", "-A", "-f"], "repodel", {"all_": True, "force": True}),
+        ]
+        for args, cmd, subset in cases:
+            with self.subTest(args=args):
+                self._assert_case(args, cmd, subset)
+
+    def test_query_commands(self) -> None:
+        cases = [
+            (["search", "bash"], "search", {"patterns": ["bash"], "repo": None, "showduplicates": False}),
+            (["s", "bash", "--repo", "base", "app", "--showduplicates"], "search", {"showduplicates": True}),
+            (["info", "bash"], "info", {"packages": ["bash"], "repo": None}),
+            (["i", "bash", "coreutils", "-r", "base"], "info", {"packages": ["bash", "coreutils"], "repo": ["base"]}),
+            (["resolve", "bash"], "resolve", {"recursive": None, "weakdeps": False, "verbose": False}),
+            (
+                ["rv", "bash", "--recursive", "2", "--weakdeps", "-v", "--arch", "x86_64", "-r", "base"],
+                "resolve",
+                {"recursive": 2, "weakdeps": True, "verbose": True, "arch": "x86_64", "repo": ["base"]},
+            ),
+            (["deplist", "bash", "-R"], "resolve", {"recursive": -1}),
+            (["download", "bash"], "download", {"resolve_flag": False, "recurse": None, "source": False, "urls": False}),
+            (
+                [
+                    "dl",
+                    "bash",
+                    "--resolve",
+                    "--recurse",
+                    "3",
+                    "--source",
+                    "--urls",
+                    "--downloaddir",
+                    "./dl",
+                    "--destdir",
+                    "./dest",
+                    "--arch",
+                    "x86_64",
+                    "-r",
+                    "base",
+                ],
+                "download",
+                {
+                    "resolve_flag": True,
+                    "recurse": 3,
+                    "source": True,
+                    "urls": True,
+                    "downloaddir": "./dl",
+                    "destdir": "./dest",
+                    "arch": "x86_64",
+                    "repo": ["base"],
+                },
+            ),
+            (["download", "bash", "-R"], "download", {"recurse": -1}),
+        ]
+
+        for args, cmd, subset in cases:
+            with self.subTest(args=args):
+                self._assert_case(args, cmd, subset)
+
+    def test_required_args_validation(self) -> None:
+        for args in (["repoadd", "name"], ["repolink", "onlyone"], ["search"], ["download"]):
+            with self.subTest(args=args):
+                code, cmd, kwargs = invoke(list(args))
+                self.assertEqual(code, 2)
+                self.assertEqual(cmd, "")
+                self.assertIsNone(kwargs)
 
 
 if __name__ == "__main__":
-    main()
+    unittest.main(verbosity=2)

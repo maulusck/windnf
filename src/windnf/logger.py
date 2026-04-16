@@ -79,8 +79,10 @@ _LEVELS = {
     "debug": logging.DEBUG,
     "info": logging.INFO,
     "warning": logging.WARNING,
+    "warn": logging.WARNING,
     "error": logging.ERROR,
     "critical": logging.CRITICAL,
+    "fatal": logging.CRITICAL,
 }
 
 
@@ -94,18 +96,24 @@ def setup_logger(
     Must be called exactly once by the CLI / entrypoint.
     All other modules should use logging.getLogger(__name__).
     """
-    if isinstance(level, str):
-        level = _LEVELS.get(level.lower(), logging.INFO)
+    if isinstance(level, int):
+        normalized_level = level
+    elif isinstance(level, str):
+        normalized_level = _LEVELS.get(level.strip().lower(), logging.INFO)
+    else:
+        normalized_level = logging.INFO
 
     logger = logging.getLogger(name)
-    logger.setLevel(level)
+    logger.setLevel(normalized_level)
     logger.propagate = False
 
     if logger.handlers:
+        for handler in logger.handlers:
+            handler.setLevel(normalized_level)
         return logger
 
     handler = logging.StreamHandler()
-    handler.setLevel(level)
+    handler.setLevel(normalized_level)
     handler.setFormatter(ColorFormatter("%(message)s"))
 
     logger.addHandler(handler)
